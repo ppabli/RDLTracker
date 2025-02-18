@@ -86,7 +86,7 @@ class LidarProcessor(Node):
 		"""
 
 		# Clean the objects that are too old
-		self.tracked_objects = [obj for obj in self.tracked_objects if timestamp - obj.timestamps[-1] < self.max_tracked_objects_age]
+		self.tracked_objects = [obj for obj in self.tracked_objects if timestamp - obj.timestamp < self.max_tracked_objects_age]
 
 		# Associate the clusters with the tracked objects
 		for cluster in clusters_info:
@@ -96,16 +96,18 @@ class LidarProcessor(Node):
 
 			for obj in self.tracked_objects:
 
-				if np.linalg.norm(obj.centroid - cluster['centroid']) < 0.60: #TODO This value should be a rreviewed
+				delta_x = np.linalg.norm(obj.centroid - cluster['centroid'])
 
-					obj.update(cluster, timestamp, self.calculate_speed)
+				if delta_x < 0.5: #TODO This value should be a reviewed
+
+					obj.update(cluster['centroid'], cluster['points'], timestamp, self.calculate_speed, delta_x)
 					associated = True
 					break
 
 			# If the cluster is not associated with any object, create a new object
 			if not associated and len(self.tracked_objects) < self.max_tracked_objects:
 
-				new_obj = TrackedObject(cluster, timestamp)
+				new_obj = TrackedObject(cluster['centroid'], cluster['points'], timestamp)
 				self.tracked_objects.append(new_obj)
 
 		# Print the tracked objects

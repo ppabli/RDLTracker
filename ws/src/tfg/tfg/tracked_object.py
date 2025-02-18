@@ -6,48 +6,40 @@ class TrackedObject:
 	Class to represent a tracked object.
 	"""
 
-	def __init__(self, cluster_info, timestamp):
+	def __init__(self, centroid, points, timestamp):
 		"""
 		Constructor for the TrackedObject class.
 		"""
 
-		self.centroid = cluster_info['centroid']
-		self.points = cluster_info['points']
+		self.centroid = centroid
+		self.points = points
 
-		self.timestamps = [timestamp]
-		self.speeds = []
+		self.timestamp = timestamp
+		self.speed = 0
 
 	def __str__(self):
 		"""
 		Return a string representation of the object.
 		"""
 
-		return f"Object | Centroid: {self.centroid} | Speed: {self.speeds[-1] if self.speeds else 0}"
+		return f"Object | Centroid: {self.centroid} | Speed: {self.speed}"
 
-	def update(self, cluster_info, timestamp, calculate_speed=False):
+	def update(self, centroid, points, timestamp, calculate_speed=False, delta_x=0):
 		"""
 		Update the object with new information.
 		"""
 
-		if len(self.timestamps) > 1 and calculate_speed:
+		if calculate_speed and delta_x > 0.08: #TODO This value should be a reviewed
 
-			delta_t = self.timestamps[-1] - self.timestamps[-2]
-			delta_x = np.linalg.norm(cluster_info['centroid'] - self.centroid)
+			self.speed = delta_x / 0.1
 
-			temp_speed = delta_x / delta_t
+		else :
 
-			if temp_speed > 0.30:
+			self.speed = 0
 
-				self.speeds.append(temp_speed)
-
-		self.centroid = cluster_info['centroid']
-		self.points = cluster_info['points']
-
-		self.timestamps.append(timestamp)
-
-		# Limit the number of timestamps to 10 and the number of speeds to 10
-		self.timestamps = self.timestamps[-10:]
-		self.speeds = self.speeds[-10:]
+		self.centroid = centroid
+		self.points = points
+		self.timestamp = timestamp
 
 	def compute_bouding_box(self, use_oriented=False):
 		"""

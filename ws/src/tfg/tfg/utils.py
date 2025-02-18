@@ -54,7 +54,7 @@ def o3d_to_ros_msg_xyz(o3d_cloud, frame_id):
 
 	return pc2_msg
 
-def filter_points_downsample(cloud, voxel_size=0.075):
+def filter_points_downsample(cloud, voxel_size=0.1):
 	"""
 	Downsample a point cloud using voxel grid downsampling.
 	"""
@@ -89,7 +89,7 @@ def crop_y(cloud, amplitude_threshold=0.5):
 
 	return cloud
 
-def filter_points_floor(cloud, distance_threshold=0.05, ransac_n=10, num_iterations=75):
+def filter_points_floor(cloud, distance_threshold=0.05, ransac_n=10, num_iterations=50):
 	"""
 	Filter the floor from a point cloud using RANSAC plane segmentation.
 	"""

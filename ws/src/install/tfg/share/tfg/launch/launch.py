@@ -19,7 +19,7 @@ def generate_launch_description():
 				{'max_tracked_objects_age': 1},
 				{'generate_bounding_boxes': True},
 				{'use_oriented_bounding_boxes': False},
-				{'calculate_speed': False},
+				{'calculate_speed': True},
 				#TODO: Add more parameters for the filtering process. Distances, eps, min_points, etc. This parameters can be set in the launch file and can be used to configure the filtering process instead of hardcoding the values. This is for temporal use only.
 			]
 		)
