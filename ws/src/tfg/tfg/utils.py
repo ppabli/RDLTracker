@@ -49,6 +49,7 @@ def o3d_to_ros_msg_xyz(o3d_cloud, frame_id):
 		PointField(name="rgb", offset=16, datatype=PointField.FLOAT32, count=1),
 		PointField(name="label", offset=20, datatype=PointField.UINT32, count=1),
 	]
+
 	pc2_msg = pc2.create_cloud(header, fields, structured_array)
 
 	return pc2_msg
@@ -131,30 +132,12 @@ def filter_points_objects(cloud, eps=0.25, min_points=20, object_limit=10):
 
 	return filtered_cloud, [
 		{
-			'id': cid,
 			'distance': distances[idx],
+			'centroid': centroids[idx],
 			'points': cluster_points[cid]
 		}
 		for idx, cid in enumerate(kept_clusters)
 	]
-
-def compute_bounding_boxes(clusters_info, use_oriented=False):
-	"""
-	Compute bounding boxes using the points stored in each cluster.
-	"""
-
-	bounding_boxes = []
-
-	for cluster in clusters_info:
-
-		pcd = o3d.geometry.PointCloud()
-		pcd.points = o3d.utility.Vector3dVector(cluster['points'])
-
-		bbox = pcd.get_oriented_bounding_box() if use_oriented else pcd.get_axis_aligned_bounding_box()
-
-		bounding_boxes.append(bbox)
-
-	return bounding_boxes
 
 def get_bounding_box_dimensions(bounding_box, use_oriented=False):
 	"""
