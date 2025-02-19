@@ -6,6 +6,7 @@ from sensor_msgs.msg import PointCloud2
 import time
 import json
 import numpy as np
+from itertools import filterfalse
 
 class LidarProcessor(Node):
 
@@ -82,35 +83,42 @@ class LidarProcessor(Node):
 
 	def associate_objects(self, clusters_info, timestamp):
 		"""
-		Asociate the clusters with the already tracked objects.
+		Associate the clusters with the tracked objects.
 		"""
 
-		# Clean the objects that are too old
-		self.tracked_objects = [obj for obj in self.tracked_objects if timestamp - obj.timestamp < self.max_tracked_objects_age]
+		# Filtrar los objetos que aún son válidos
+		self.tracked_objects = list(filterfalse(lambda obj: timestamp - obj.timestamp >= self.max_tracked_objects_age, self.tracked_objects))
 
-		# Associate the clusters with the tracked objects
+		min_distance_threshold = 0.5	#TODO Make configurable
+		min_speed_threshold = 0.1		#TODO Make configurable
+
+		tracked_objects_array = np.array([obj.centroid for obj in self.tracked_objects]) if self.tracked_objects else np.empty((0, 2))
+
 		for cluster in clusters_info:
 
-			# Check if the cluster is already associated with an object
-			associated = False
+			centroid = cluster['centroid']
 
-			for obj in self.tracked_objects:
+			if tracked_objects_array.size > 0:
 
-				delta_x = np.linalg.norm(obj.centroid - cluster['centroid'])
+				distances = np.linalg.norm(tracked_objects_array - centroid, axis=1)
+				min_index = np.argmin(distances)
+				min_distance = distances[min_index]
 
-				if delta_x < 0.5: #TODO This value should be a reviewed
+				if min_distance < min_distance_threshold:
 
-					obj.update(cluster['centroid'], cluster['points'], timestamp, self.calculate_speed, delta_x)
-					associated = True
-					break
+					obj = self.tracked_objects[min_index]
+					obj.update(centroid, cluster['points'], timestamp)
 
-			# If the cluster is not associated with any object, create a new object
-			if not associated and len(self.tracked_objects) < self.max_tracked_objects:
+					if self.calculate_speed and min_distance >= min_speed_threshold:
 
-				new_obj = TrackedObject(cluster['centroid'], cluster['points'], timestamp)
-				self.tracked_objects.append(new_obj)
+						obj.update_speed(min_distance)
 
-		# Print the tracked objects
+					continue
+
+			if len(self.tracked_objects) < self.max_tracked_objects:
+
+				self.tracked_objects.append(TrackedObject(centroid, cluster['points'], timestamp))
+
 		if self.debug_mode:
 			for obj in self.tracked_objects:
 				self.get_logger().info(str(obj))

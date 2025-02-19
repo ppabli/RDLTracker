@@ -29,17 +29,16 @@ class TrackedObject:
 		Update the object with new information.
 		"""
 
-		if calculate_speed and delta_x > 0.08: #TODO This value should be a reviewed
-
-			self.speed = delta_x / 0.1
-
-		else :
-
-			self.speed = 0
-
 		self.centroid = centroid
 		self.points = points
 		self.timestamp = timestamp
+
+	def update_speed(self, delta_x):
+		"""
+		Update the speed of the object.
+		"""
+
+		self.speed = delta_x / 0.1
 
 	def compute_bouding_box(self, use_oriented=False):
 		"""

@@ -106,37 +106,42 @@ def filter_points_objects(cloud, eps=0.25, min_points=20, object_limit=10):
 	"""
 
 	points = cloud.point.positions.numpy()
-
 	clusters = cloud.cluster_dbscan(eps=eps, min_points=min_points).numpy()
 
-	if (max_cluster := clusters.max()) < 0:
+	if clusters.max() < 0:
+		return o3d.t.geometry.PointCloud(cloud.device), []
 
-		empty_cloud = o3d.t.geometry.PointCloud(cloud.device)
-		empty_cloud.point.positions = o3d.core.Tensor(np.zeros((0, 3)), dtype=o3d.core.float32, device=cloud.device)
+	unique_clusters, cluster_counts = np.unique(clusters[clusters >= 0], return_counts=True)
 
-		return empty_cloud, []
+	valid_clusters = unique_clusters[cluster_counts >= min_points]
 
-	unique_clusters = np.arange(max_cluster + 1)
-	cluster_points = [points[clusters == cid] for cid in unique_clusters]
-	centroids = np.array([points[clusters == cid].mean(axis=0) for cid in unique_clusters])
-	distances = np.sqrt(centroids[:, 0]**2 + centroids[:, 1]**2)
+	if valid_clusters.size == 0:
 
+		return o3d.t.geometry.PointCloud(cloud.device), []
+
+	mask = np.isin(clusters, valid_clusters)
+	valid_points = points[mask]
+	valid_clusters = clusters[mask]
+
+	centroids = np.array([
+		valid_points[valid_clusters == cid].mean(axis=0) for cid in np.unique(valid_clusters)
+	])
+
+	distances = np.linalg.norm(centroids[:, :2], axis=1)
 	sorted_indices = np.argsort(distances)[:object_limit]
-	kept_clusters = unique_clusters[sorted_indices]
 
-	final_mask = np.isin(clusters, kept_clusters)
-	filtered_points = points[final_mask]
+	selected_clusters = valid_clusters[np.isin(valid_clusters, valid_clusters[sorted_indices])]
 
 	filtered_cloud = o3d.t.geometry.PointCloud(cloud.device)
-	filtered_cloud.point.positions = o3d.core.Tensor(filtered_points, dtype=o3d.core.float32, device=cloud.device)
+	filtered_cloud.point.positions = o3d.core.Tensor(valid_points[np.isin(valid_clusters, selected_clusters)], dtype=o3d.core.float32, device=cloud.device)
 
 	return filtered_cloud, [
 		{
 			'distance': distances[idx],
 			'centroid': centroids[idx],
-			'points': cluster_points[cid]
+			'points': valid_points[valid_clusters == valid_clusters[sorted_indices[idx]]]
 		}
-		for idx, cid in enumerate(kept_clusters)
+		for idx in range(len(sorted_indices))
 	]
 
 def get_bounding_box_dimensions(bounding_box, use_oriented=False):
