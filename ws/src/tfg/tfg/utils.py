@@ -1,16 +1,25 @@
 import rclpy
-import open3d as o3d
-import numpy as np
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
 import sensor_msgs_py.point_cloud2 as pc2
+
+from scipy.spatial import cKDTree
+from collections import deque
+
+import open3d as o3d
+import numpy as np
+import torch
+
+from tfg.tracked_object import TrackedObject
+from tfg.model import normalize_point_cloud_tensor
+
+DEVICE = o3d.core.Device("CPU:0")
 
 def ros2_msg_to_o3d_xyz(ros_cloud):
 	"""
 	Convert the (x, y, z) ROS2 PointCloud2 message to an Open3D Tensor-based (x,y,z) PointCloud.
 	"""
 
-	device = o3d.core.Device("CPU:0")
 	dtype = o3d.core.float32
 
 	dtype_np = [('x', np.float32), ('y', np.float32), ('z', np.float32)]
@@ -18,8 +27,8 @@ def ros2_msg_to_o3d_xyz(ros_cloud):
 
 	points = np.stack((cloud_array['x'], cloud_array['y'], cloud_array['z']), axis=-1)
 
-	o3d_cloud = o3d.t.geometry.PointCloud(device)
-	o3d_cloud.point.positions = o3d.core.Tensor(points, dtype, device)
+	o3d_cloud = o3d.t.geometry.PointCloud(DEVICE)
+	o3d_cloud.point.positions = o3d.core.Tensor(points, dtype, o3d_cloud.device)
 
 	return o3d_cloud
 
@@ -54,7 +63,7 @@ def o3d_to_ros_msg_xyz(o3d_cloud, frame_id):
 
 	return pc2_msg
 
-def filter_points_downsample(cloud, voxel_size=0.1):
+def filter_points_downsample(cloud, voxel_size=0.2):
 	"""
 	Downsample a point cloud using voxel grid downsampling.
 	"""
@@ -77,6 +86,18 @@ def filter_points_by_distance(cloud, distance_threshold):
 
 	return cloud
 
+def crop_x(cloud, amplitude_threshold=0.5):
+	"""
+	Crop a point cloud based on the x-axis margin.
+	"""
+
+	positions_np = cloud.point.positions.numpy()
+
+	mask = np.abs(positions_np[:, 0]) < amplitude_threshold
+	cloud = cloud.select_by_index(np.where(mask)[0])
+
+	return cloud
+
 def crop_y(cloud, amplitude_threshold=0.5):
 	"""
 	Crop a point cloud based on the y-axis margin.
@@ -89,7 +110,19 @@ def crop_y(cloud, amplitude_threshold=0.5):
 
 	return cloud
 
-def filter_points_floor(cloud, distance_threshold=0.05, ransac_n=10, num_iterations=50):
+def crop_z(cloud, amplitude_threshold=0.5):
+	"""
+	Crop a point cloud based on the z-axis margin.
+	"""
+
+	positions_np = cloud.point.positions.numpy()
+
+	mask = np.abs(positions_np[:, 2]) < amplitude_threshold
+	cloud = cloud.select_by_index(np.where(mask)[0])
+
+	return cloud
+
+def filter_points_floor(cloud, distance_threshold=0.2, ransac_n=3, num_iterations=50):
 	"""
 	Filter the floor from a point cloud using RANSAC plane segmentation.
 	"""
@@ -100,49 +133,135 @@ def filter_points_floor(cloud, distance_threshold=0.05, ransac_n=10, num_iterati
 
 	return cloud_no_floor
 
-def filter_points_objects(cloud, eps=0.25, min_points=20, object_limit=10):
+def filter_points_outliers(cloud, neighbors=10, std_ratio=0.5):
+	"""
+	Filter the outliers from a point cloud using statistical outlier removal.
+	"""
+
+	cloud_filtered, _ = cloud.remove_statistical_outliers(nb_neighbors=neighbors, std_ratio=std_ratio)
+
+	return cloud_filtered
+
+def euclidean_clustering(points, eps=0.75, min_samples=30):
+	"""
+	Perform K-D tree-based Euclidean clustering on a set of points.
+	"""
+
+	tree = cKDTree(points)
+	labels = -np.ones(points.shape[0], dtype=int)
+	cluster_id = 0
+
+	for i in range(points.shape[0]):
+
+		if labels[i] == -1:
+
+			neighbors = tree.query_ball_point(points[i], eps)
+
+			if len(neighbors) < min_samples:
+
+				continue
+
+			queue = deque(neighbors)
+			labels[i] = cluster_id
+
+			while queue:
+
+				idx = queue.popleft()
+
+				if labels[idx] == -1:
+
+					labels[idx] = cluster_id
+					queue.extend(tree.query_ball_point(points[idx], eps))
+
+			cluster_id += 1
+
+	return labels
+
+def filter_points_objects_ai(cloud, pipeline):
+
+	points = cloud.point.positions.numpy()
+	intensity = np.zeros((points.shape[0], 1), dtype=np.float32)
+
+	final_points = np.concatenate([points, intensity], axis=1)
+
+	data = {
+		"point": final_points,
+	}
+
+	predictions = pipeline.run_inference(data)
+
+	return predictions
+
+def filter_points_objects(cloud, eps=0.65, min_points=30):
 	"""
 	Filter the objects from a point cloud using DBSCAN clustering.
 	"""
 
-	points = cloud.point.positions.numpy()
 	clusters = cloud.cluster_dbscan(eps=eps, min_points=min_points).numpy()
 
 	if clusters.max() < 0:
-		return o3d.t.geometry.PointCloud(cloud.device), []
 
-	unique_clusters, cluster_counts = np.unique(clusters[clusters >= 0], return_counts=True)
+		return []
 
-	valid_clusters = unique_clusters[cluster_counts >= min_points]
+	result_objects = []
 
-	if valid_clusters.size == 0:
+	for idx in range(clusters.max() + 1):
 
-		return o3d.t.geometry.PointCloud(cloud.device), []
+		cluster_indices = np.where(clusters == idx)[0]
 
-	mask = np.isin(clusters, valid_clusters)
-	valid_points = points[mask]
-	valid_clusters = clusters[mask]
+		cluster_cloud = cloud.select_by_index(cluster_indices)
 
-	centroids = np.array([
-		valid_points[valid_clusters == cid].mean(axis=0) for cid in np.unique(valid_clusters)
-	])
+		filtered_cluster = filter_points_outliers(cluster_cloud)
 
-	distances = np.linalg.norm(centroids[:, :2], axis=1)
-	sorted_indices = np.argsort(distances)[:object_limit]
+		result_objects.append(
+			TrackedObject(
+				points=filtered_cluster,
+				centroid=filtered_cluster.get_center(),
+				features=get_features_fpfh(filtered_cluster)
+			)
+		)
 
-	selected_clusters = valid_clusters[np.isin(valid_clusters, valid_clusters[sorted_indices])]
+	return result_objects
 
-	filtered_cloud = o3d.t.geometry.PointCloud(cloud.device)
-	filtered_cloud.point.positions = o3d.core.Tensor(valid_points[np.isin(valid_clusters, selected_clusters)], dtype=o3d.core.float32, device=cloud.device)
+def objects_to_point_cloud(objects):
+	"""
+	Convert a list of point cloud to a single point cloud.
+	"""
 
-	return filtered_cloud, [
-		{
-			'distance': distances[idx],
-			'centroid': centroids[idx],
-			'points': valid_points[valid_clusters == valid_clusters[sorted_indices[idx]]]
-		}
-		for idx in range(len(sorted_indices))
-	]
+	cloud = o3d.t.geometry.PointCloud(DEVICE)
+
+	if len(objects) == 0:
+
+		cloud.point.positions = o3d.core.Tensor(np.zeros((0, 3), dtype=np.float32), dtype=o3d.core.float32, device=cloud.device)
+		return cloud
+
+	base_tensor = objects[0].points.point.positions
+	[base_tensor.append(obj.points.point.positions) for obj in objects[1:]]
+	cloud.point.positions = base_tensor
+
+	return cloud
+
+def filter_objects_by_volume(objects, min_vol=2, max_vol=50.0, use_oriented_bounding_boxes=False):
+	"""
+	Filter the objects based on their volume.
+	"""
+
+	boxes = [obj.compute_bouding_box(use_oriented_bounding_boxes) for obj in objects]
+	volumes = [get_bounding_box_volume(box, use_oriented_bounding_boxes) for box in boxes]
+
+	mask = np.logical_and(np.array(volumes) > min_vol, np.array(volumes) < max_vol)
+	objects = [obj for obj, m in zip(objects, mask) if m]
+
+	return objects
+
+def get_bounding_box_volume(bounding_box, use_oriented=False):
+	"""
+	Get the volume of a bounding box.
+	"""
+
+	extents = bounding_box.extent if use_oriented else bounding_box.get_extent()
+
+	return extents[0] * extents[1] * extents[2]
 
 def get_bounding_box_dimensions(bounding_box, use_oriented=False):
 	"""
@@ -153,3 +272,87 @@ def get_bounding_box_dimensions(bounding_box, use_oriented=False):
 
 	return extents[0], extents[1], extents[2]
 
+def get_features_fpfh(cloud, radius=0.03, max_nn=50):
+	"""
+	Get features from a cluster of points using FPFH descriptors.
+	"""
+
+	cloud.estimate_normals(max_nn=20, radius=radius)
+
+	camera_location = o3d.core.Tensor([0.0, 0.0, 0.0], dtype=o3d.core.Dtype.Float32, device=cloud.device)
+	cloud.orient_normals_to_align_with_direction(camera_location)
+
+	fpfh = o3d.t.pipelines.registration.compute_fpfh_feature(
+		cloud,
+		radius=radius,
+		max_nn=max_nn
+	)
+
+	return fpfh
+
+def classify_objects_by_features(objects, use_oriented=False):
+	"""
+	Classify objects in a point cloud based on their volume.
+	"""
+
+	for obj in objects:
+
+		bounding_box = obj.compute_bouding_box(use_oriented)
+
+		volume = get_bounding_box_volume(bounding_box, use_oriented)
+
+		features_norm = np.linalg.norm(obj.features, axis=1)
+		features_norm = features_norm[features_norm > 0]
+
+		feature_variance = np.var(obj.features, axis=0)
+
+		complexity = np.mean(feature_variance)
+
+		#TODO Fix to proper classification
+
+	return objects
+
+def classify_objects_by_model(objects, model, batch_size=16):
+	"""
+	Classify objects in a point cloud using a pre-trained model.
+	"""
+
+	if not objects:
+
+		return objects
+
+	all_points = []
+
+	for obj in objects:
+
+		points = obj.points.point.positions.numpy()
+		normalized_points = normalize_point_cloud_tensor(torch.tensor(points, dtype=torch.float32))
+		all_points.append(normalized_points)
+
+	predictions = []
+
+	with torch.no_grad():
+
+		for i in range(0, len(all_points), batch_size):
+
+			batch = all_points[i:i + batch_size]
+
+			batch_tensor = torch.stack(batch).to(model.device)
+
+			outputs = model.model(batch_tensor)
+
+			batch_predictions = torch.argmax(outputs, dim=1).cpu().numpy()
+			predictions.extend(batch_predictions)
+
+	for idx, obj in enumerate(objects):
+
+		obj.label = predictions[idx]
+
+	return objects
+
+def filter_objects_by_label(objects, filter_labels=set([0, 1, 2, 3, 4, 5, 6, 7, 8])):
+
+	labels = np.array([obj.label for obj in objects])
+	mask = np.isin(labels, list(filter_labels))
+
+	return [obj for i, obj in enumerate(objects) if mask[i]]

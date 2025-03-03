@@ -15,10 +15,10 @@ def generate_launch_description():
 				{'debug_mode': True},
 				{'input_topic': '/livox/lidar'},
 				{'frame_id': 'livox_frame'},
-				{'max_tracked_objects': 10},
+				{'max_tracked_objects': 100},
 				{'max_tracked_objects_age': 1},
 				{'generate_bounding_boxes': True},
-				{'use_oriented_bounding_boxes': False},
+				{'use_oriented_bounding_boxes': True},
 				{'calculate_speed': True},
 				#TODO: Add more parameters for the filtering process. Distances, eps, min_points, etc. This parameters can be set in the launch file and can be used to configure the filtering process instead of hardcoding the values. This is for temporal use only.
 			]

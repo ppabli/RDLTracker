@@ -6,7 +6,7 @@ class TrackedObject:
 	Class to represent a tracked object.
 	"""
 
-	def __init__(self, centroid, points, timestamp):
+	def __init__(self, centroid, points, features, id=-1, timestamp=None, label='unknown'):
 		"""
 		Constructor for the TrackedObject class.
 		"""
@@ -15,16 +15,22 @@ class TrackedObject:
 		self.points = points
 
 		self.timestamp = timestamp
-		self.speed = 0
+		self.features = features # Tensor
+		self.label = label
+
+		self.speed = 0 # m/s
+		self.direction = None # Normalized tensor
+
+		self.id = id
 
 	def __str__(self):
 		"""
 		Return a string representation of the object.
 		"""
 
-		return f"Object | Centroid: {self.centroid} | Speed: {self.speed}"
+		return f"Object | ID:{self.id} | Label: {self.label} | Speed: {self.speed:.2f} m/s"
 
-	def update(self, centroid, points, timestamp, calculate_speed=False, delta_x=0):
+	def update(self, centroid, points, features, timestamp):
 		"""
 		Update the object with new information.
 		"""
@@ -32,13 +38,15 @@ class TrackedObject:
 		self.centroid = centroid
 		self.points = points
 		self.timestamp = timestamp
+		self.features = features
 
-	def update_speed(self, delta_x):
+	def update_speed(self, new_speed, new_direction):
 		"""
-		Update the speed of the object.
+		Update the speed of the object based on movement over time.
 		"""
 
-		self.speed = delta_x / 0.1
+		self.speed = new_speed
+		self.direction = new_direction
 
 	def compute_bouding_box(self, use_oriented=False):
 		"""
