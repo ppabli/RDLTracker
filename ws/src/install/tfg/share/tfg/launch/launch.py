@@ -20,7 +20,12 @@ def generate_launch_description():
 				{'generate_bounding_boxes': True},
 				{'use_oriented_bounding_boxes': True},
 				{'calculate_speed': True},
-				#TODO: Add more parameters for the filtering process. Distances, eps, min_points, etc. This parameters can be set in the launch file and can be used to configure the filtering process instead of hardcoding the values. This is for temporal use only.
+				{'notify_on_speed': True},
+				{'notify_on_width': True},
+				{'notify_on_height': True},
+				{'notify_on_length': True},
+				{'notify_on_weight': True},
+				{'gps_coordinates': [42.886232, -8.547737]},
 			]
 		)
 

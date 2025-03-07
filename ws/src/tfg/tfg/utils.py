@@ -1,17 +1,16 @@
-import rclpy
-from sensor_msgs.msg import PointCloud2, PointField
-from std_msgs.msg import Header
-import sensor_msgs_py.point_cloud2 as pc2
-
-from scipy.spatial import cKDTree
 from collections import deque
 
-import open3d as o3d
 import numpy as np
+import open3d as o3d
+import rclpy
+import requests
+import sensor_msgs_py.point_cloud2 as pc2
 import torch
-
-from tfg.tracked_object import TrackedObject
+from scipy.spatial import cKDTree
+from sensor_msgs.msg import PointField
+from std_msgs.msg import Header
 from tfg.model import normalize_point_cloud_tensor
+from tfg.tracked_object import TrackedObject
 
 DEVICE = o3d.core.Device("CPU:0")
 
@@ -63,7 +62,7 @@ def o3d_to_ros_msg_xyz(o3d_cloud, frame_id):
 
 	return pc2_msg
 
-def filter_points_downsample(cloud, voxel_size=0.2):
+def filter_points_downsample(cloud, voxel_size=0.1):
 	"""
 	Downsample a point cloud using voxel grid downsampling.
 	"""
@@ -122,18 +121,18 @@ def crop_z(cloud, amplitude_threshold=0.5):
 
 	return cloud
 
-def filter_points_floor(cloud, distance_threshold=0.2, ransac_n=3, num_iterations=50):
+def filter_points_floor(cloud, distance_threshold=0.2, ransac_n=3, num_iterations=100):
 	"""
 	Filter the floor from a point cloud using RANSAC plane segmentation.
 	"""
 
-	plane_model, inliers = cloud.segment_plane(distance_threshold=distance_threshold, ransac_n=ransac_n, num_iterations=num_iterations)
+	_, inliers = cloud.segment_plane(distance_threshold=distance_threshold, ransac_n=ransac_n, num_iterations=num_iterations)
 
 	cloud_no_floor = cloud.select_by_index(inliers, invert=True)
 
 	return cloud_no_floor
 
-def filter_points_outliers(cloud, neighbors=10, std_ratio=0.5):
+def filter_points_outliers(cloud, neighbors=20, std_ratio=2.0):
 	"""
 	Filter the outliers from a point cloud using statistical outlier removal.
 	"""
@@ -192,7 +191,7 @@ def filter_points_objects_ai(cloud, pipeline):
 
 	return predictions
 
-def filter_points_objects(cloud, eps=0.65, min_points=30):
+def filter_points_objects(cloud, eps=0.75, min_points=50):
 	"""
 	Filter the objects from a point cloud using DBSCAN clustering.
 	"""
@@ -235,9 +234,8 @@ def objects_to_point_cloud(objects):
 		cloud.point.positions = o3d.core.Tensor(np.zeros((0, 3), dtype=np.float32), dtype=o3d.core.float32, device=cloud.device)
 		return cloud
 
-	base_tensor = objects[0].points.point.positions
-	[base_tensor.append(obj.points.point.positions) for obj in objects[1:]]
-	cloud.point.positions = base_tensor
+	points = np.concatenate([obj.points.point.positions.numpy() for obj in objects], axis=0)
+	cloud.point.positions = o3d.core.Tensor(points, dtype=o3d.core.float32, device=cloud.device)
 
 	return cloud
 
@@ -350,9 +348,39 @@ def classify_objects_by_model(objects, model, batch_size=16):
 
 	return objects
 
-def filter_objects_by_label(objects, filter_labels=set([0, 1, 2, 3, 4, 5, 6, 7, 8])):
+def filter_objects_by_label(objects, filter_labels={0, 1, 2, 3, 4, 5, 6, 7, 8}):
 
 	labels = np.array([obj.label for obj in objects])
 	mask = np.isin(labels, list(filter_labels))
 
 	return [obj for i, obj in enumerate(objects) if mask[i]]
+
+def filter_objects_by_speed(objects, min_speed=0.0, max_speed=10.0):
+	"""
+	Filter the objects based on their speed.
+	"""
+
+	return [obj for obj in objects if obj.speed > min_speed and obj.speed < max_speed]
+
+def get_openstreetmap_data(latitude, longitude, radius=50):
+	"""
+	Request OpenStreetMap data for a given latitude and longitude.
+	"""
+
+	url = "https://overpass-api.de/api/interpreter"
+	query = f"""
+	[out:json];
+	(
+		way(around:{radius},{latitude},{longitude})["maxspeed"];
+		way(around:{radius},{latitude},{longitude})["maxheight"];
+		way(around:{radius},{latitude},{longitude})["maxwidth"];
+		way(around:{radius},{latitude},{longitude})["maxlength"];
+		way(around:{radius},{latitude},{longitude})["maxweight"];
+	);
+	out;
+	"""
+
+	response = requests.get(url, params={"data": query})
+	data = response.json()
+
+	return data['elements'][0]['tags']
