@@ -1,16 +1,16 @@
-from collections import deque
-
 import numpy as np
 import open3d as o3d
 import rclpy
 import requests
 import sensor_msgs_py.point_cloud2 as pc2
 import torch
-from scipy.spatial import cKDTree
 from sensor_msgs.msg import PointField
 from std_msgs.msg import Header
 from tfg.model import normalize_point_cloud_tensor
 from tfg.tracked_object import TrackedObject
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
+
 
 DEVICE = o3d.core.Device("CPU:0")
 
@@ -19,15 +19,13 @@ def ros2_msg_to_o3d_xyz(ros_cloud):
 	Convert the (x, y, z) ROS2 PointCloud2 message to an Open3D Tensor-based (x,y,z) PointCloud.
 	"""
 
-	dtype = o3d.core.float32
-
 	dtype_np = [('x', np.float32), ('y', np.float32), ('z', np.float32)]
 	cloud_array = np.array(list(pc2.read_points(ros_cloud, field_names=("x", "y", "z"), skip_nans=True)), dtype=dtype_np)
 
 	points = np.stack((cloud_array['x'], cloud_array['y'], cloud_array['z']), axis=-1)
 
 	o3d_cloud = o3d.t.geometry.PointCloud(DEVICE)
-	o3d_cloud.point.positions = o3d.core.Tensor(points, dtype, o3d_cloud.device)
+	o3d_cloud.point.positions = o3d.core.Tensor(points, o3d.core.float32, o3d_cloud.device)
 
 	return o3d_cloud
 
@@ -121,7 +119,7 @@ def crop_z(cloud, amplitude_threshold=0.5):
 
 	return cloud
 
-def filter_points_floor(cloud, distance_threshold=0.2, ransac_n=3, num_iterations=100):
+def filter_points_floor(cloud, distance_threshold=0.2, ransac_n=3, num_iterations=50):
 	"""
 	Filter the floor from a point cloud using RANSAC plane segmentation.
 	"""
@@ -141,60 +139,14 @@ def filter_points_outliers(cloud, neighbors=20, std_ratio=2.0):
 
 	return cloud_filtered
 
-def euclidean_clustering(points, eps=0.75, min_samples=30):
+def filter_points_objects(cloud, timestamp, eps=0.5, min_points=40):
 	"""
-	Perform K-D tree-based Euclidean clustering on a set of points.
+	Filter the objects from a point cloud
 	"""
 
-	tree = cKDTree(points)
-	labels = -np.ones(points.shape[0], dtype=int)
-	cluster_id = 0
+	if len(cloud.point.positions) == 0:
 
-	for i in range(points.shape[0]):
-
-		if labels[i] == -1:
-
-			neighbors = tree.query_ball_point(points[i], eps)
-
-			if len(neighbors) < min_samples:
-
-				continue
-
-			queue = deque(neighbors)
-			labels[i] = cluster_id
-
-			while queue:
-
-				idx = queue.popleft()
-
-				if labels[idx] == -1:
-
-					labels[idx] = cluster_id
-					queue.extend(tree.query_ball_point(points[idx], eps))
-
-			cluster_id += 1
-
-	return labels
-
-def filter_points_objects_ai(cloud, pipeline):
-
-	points = cloud.point.positions.numpy()
-	intensity = np.zeros((points.shape[0], 1), dtype=np.float32)
-
-	final_points = np.concatenate([points, intensity], axis=1)
-
-	data = {
-		"point": final_points,
-	}
-
-	predictions = pipeline.run_inference(data)
-
-	return predictions
-
-def filter_points_objects(cloud, eps=0.75, min_points=50):
-	"""
-	Filter the objects from a point cloud using DBSCAN clustering.
-	"""
+		return []
 
 	clusters = cloud.cluster_dbscan(eps=eps, min_points=min_points).numpy()
 
@@ -210,13 +162,12 @@ def filter_points_objects(cloud, eps=0.75, min_points=50):
 
 		cluster_cloud = cloud.select_by_index(cluster_indices)
 
-		filtered_cluster = filter_points_outliers(cluster_cloud)
-
 		result_objects.append(
 			TrackedObject(
-				points=filtered_cluster,
-				centroid=filtered_cluster.get_center(),
-				features=get_features_fpfh(filtered_cluster)
+				points=cluster_cloud,
+				centroid=cluster_cloud.get_center(),
+				features=get_features_fpfh(cluster_cloud),
+				timestamp=timestamp
 			)
 		)
 
@@ -239,34 +190,13 @@ def objects_to_point_cloud(objects):
 
 	return cloud
 
-def filter_objects_by_volume(objects, min_vol=2, max_vol=50.0, use_oriented_bounding_boxes=False):
-	"""
-	Filter the objects based on their volume.
-	"""
-
-	boxes = [obj.compute_bouding_box(use_oriented_bounding_boxes) for obj in objects]
-	volumes = [get_bounding_box_volume(box, use_oriented_bounding_boxes) for box in boxes]
-
-	mask = np.logical_and(np.array(volumes) > min_vol, np.array(volumes) < max_vol)
-	objects = [obj for obj, m in zip(objects, mask) if m]
-
-	return objects
-
-def get_bounding_box_volume(bounding_box, use_oriented=False):
-	"""
-	Get the volume of a bounding box.
-	"""
-
-	extents = bounding_box.extent if use_oriented else bounding_box.get_extent()
-
-	return extents[0] * extents[1] * extents[2]
-
-def get_bounding_box_dimensions(bounding_box, use_oriented=False):
+def get_bounding_box_dimensions(bounding_box):
 	"""
 	Get the dimensions of a bounding box.
 	"""
 
-	extents = bounding_box.extent if use_oriented else bounding_box.get_extent()
+	extents = bounding_box.get_extent()
+	extents = extents.numpy()
 
 	return extents[0], extents[1], extents[2]
 
@@ -287,28 +217,6 @@ def get_features_fpfh(cloud, radius=0.03, max_nn=50):
 	)
 
 	return fpfh
-
-def classify_objects_by_features(objects, use_oriented=False):
-	"""
-	Classify objects in a point cloud based on their volume.
-	"""
-
-	for obj in objects:
-
-		bounding_box = obj.compute_bouding_box(use_oriented)
-
-		volume = get_bounding_box_volume(bounding_box, use_oriented)
-
-		features_norm = np.linalg.norm(obj.features, axis=1)
-		features_norm = features_norm[features_norm > 0]
-
-		feature_variance = np.var(obj.features, axis=0)
-
-		complexity = np.mean(feature_variance)
-
-		#TODO Fix to proper classification
-
-	return objects
 
 def classify_objects_by_model(objects, model, batch_size=16):
 	"""
@@ -355,13 +263,6 @@ def filter_objects_by_label(objects, filter_labels={0, 1, 2, 3, 4, 5, 6, 7, 8}):
 
 	return [obj for i, obj in enumerate(objects) if mask[i]]
 
-def filter_objects_by_speed(objects, min_speed=0.0, max_speed=10.0):
-	"""
-	Filter the objects based on their speed.
-	"""
-
-	return [obj for obj in objects if obj.speed > min_speed and obj.speed < max_speed]
-
 def get_openstreetmap_data(latitude, longitude, radius=50):
 	"""
 	Request OpenStreetMap data for a given latitude and longitude.
@@ -384,3 +285,76 @@ def get_openstreetmap_data(latitude, longitude, radius=50):
 	data = response.json()
 
 	return data['elements'][0]['tags']
+
+def objects_to_bounding_boxes(objects, frame_id):
+	"""
+	Create marker array messages for all objects' bounding boxes.
+	"""
+
+	marker_array = MarkerArray()
+
+	# Remove all previous markers using a DELETEAll action
+	marker = Marker()
+	marker.header.frame_id = frame_id
+	marker.action = Marker.DELETEALL
+	marker_array.markers.append(marker)
+
+	for i, obj in enumerate(objects):
+
+		# Compute bounding box
+		bbox = obj.compute_bounding_box()
+
+		# Create marker
+		marker = Marker()
+		marker.header.frame_id = frame_id
+		marker.header.stamp = rclpy.time.Time().to_msg()
+		marker.ns = "bounding_boxes"
+		marker.id = obj.id
+		marker.type = Marker.CUBE
+		marker.action = Marker.ADD
+
+		# Set position (center of bounding box)
+		center = bbox.get_center().numpy()
+
+		marker.pose.position.x = float(center[0])
+		marker.pose.position.y = float(center[1])
+		marker.pose.position.z = float(center[2])
+
+		marker.pose.orientation.w = 1.0
+
+		# Set dimensions
+		x, y, z = get_bounding_box_dimensions(bbox)
+
+		marker.scale.x = float(x)
+		marker.scale.y = float(y)
+		marker.scale.z = float(z)
+
+		# Set color based on object label or other properties
+		# Here using a simple color scheme: static objects are green, moving are red
+		if obj.is_static():
+
+			marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.3)
+
+		else:
+
+			marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.3)
+
+		# Add text label with ID and other info
+		text_marker = Marker()
+		text_marker.header = marker.header
+		text_marker.ns = "object_labels"
+		text_marker.id = obj.id
+		text_marker.type = Marker.TEXT_VIEW_FACING
+		text_marker.action = Marker.ADD
+		text_marker.pose.position.x = float(center[0])
+		text_marker.pose.position.y = float(center[1])
+		text_marker.pose.position.z = float(center[2]) + 0.5
+		text_marker.scale.z = 0.15  # Text size
+		text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+		text_marker.text = f"ID: {obj.id} | {obj.label} | {obj.speed:.2f} m/s"
+
+		# Add markers to the array
+		marker_array.markers.append(marker)
+		marker_array.markers.append(text_marker)
+
+	return marker_array

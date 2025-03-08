@@ -8,15 +8,15 @@ from torch.utils.data import Dataset, DataLoader
 import open3d as o3d
 
 LABEL_MAP = {
-	"car": 0,
-	"pedestrian": 1,
-	"cyclist": 2,
-	"van": 3,
-	"truck": 4,
-	"person_sitting": 5,
-	"tram": 6,
-	"misc": 7,
-	"dontCare": 8
+	"Car": 0,
+	"Pedestrian": 1,
+	"Cyclist": 2,
+	"Van": 3,
+	"Truck": 4,
+	"Person_sitting": 5,
+	"Tram": 6,
+	"Misc": 7,
+	"DontCare": 8
 }
 
 INVERSE_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
@@ -174,7 +174,7 @@ class KittiDataset(Dataset):
 
 			for obj_points, obj_label in zip(objects, object_labels):
 
-				normalized_points = normalize_point_cloud(obj_points, self.num_points)
+				normalized_points = normalize_point_cloud_tensor(obj_points, self.num_points)
 				self.point_clouds.append(normalized_points)
 				self.labels.append(obj_label)
 
