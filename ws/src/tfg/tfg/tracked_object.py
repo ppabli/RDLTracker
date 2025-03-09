@@ -1,3 +1,4 @@
+from tfg.constants import TORCH_DEVICE, TORCH_DTYPE
 import torch
 
 
@@ -15,8 +16,8 @@ class TrackedObject:
 		self.points = points
 
 		# Store centroids and features as Open3D tensors or PyTorch tensors
-		self.centroid = self._process_o3d_tensor(centroid)
-		self.features = self._process_o3d_tensor(features)
+		self.centroid = centroid
+		self.features = features
 
 		self.timestamp = timestamp
 		self.label = label
@@ -24,7 +25,7 @@ class TrackedObject:
 		self.max_history_length = max_history_length
 
 		self.speed = 0.0
-		self.direction = torch.zeros(3, dtype=torch.float32)
+		self.direction = torch.zeros(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 
 		# Pre-allocate memory for histories
 		self.position_history = []
@@ -41,13 +42,6 @@ class TrackedObject:
 
 		self.position_history.append((self.centroid, timestamp))
 
-	def _process_o3d_tensor(self, data):
-		"""
-		Process Open3D tensor.
-		"""
-
-		return torch.tensor(data.numpy(), dtype=torch.float32, device='cpu')
-
 	def _init_kalman_filter(self, initial_position):
 		"""
 		Initialize Kalman filter for position and velocity tracking using PyTorch.
@@ -57,31 +51,30 @@ class TrackedObject:
 		dt = 0.1
 
 		# State transition matrix (physics model)
-		self.F = torch.eye(6, dtype=torch.float32)
+		self.F = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		self.F[0, 3] = self.F[1, 4] = self.F[2, 5] = dt
 
 		# Measurement function
-		self.H = torch.zeros((3, 6), dtype=torch.float32)
+		self.H = torch.zeros((3, 6), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		self.H[0, 0] = self.H[1, 1] = self.H[2, 2] = 1.0
 
 		# Initial state
-		self.x = torch.zeros(6, dtype=torch.float32)
+		self.x = torch.zeros(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		self.x[:3] = initial_position
 
 		# Covariance matrices - tuned for better tracking performance
-		self.P = torch.eye(6, dtype=torch.float32) * 10.0  # Initial state uncertainty
-		self.R = torch.eye(3, dtype=torch.float32) * 0.1  # Measurement uncertainty
+		self.P = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE) * 10.0  # Initial state uncertainty
+		self.R = torch.eye(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE) * 0.1  # Measurement uncertainty
 
 		# Process noise - how much we expect the model to deviate from reality
-		self.Q = torch.eye(6, dtype=torch.float32)
+		self.Q = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		self.Q[0:3, 0:3] *= 0.1  # position noise
 		self.Q[3:6, 3:6] *= 0.05  # velocity noise
 
 	def __str__(self):
 		"""Return a string representation of the object."""
 
-		status = "S" if self.is_static() else "M"
-		return f"Object | ID:{self.id} | Label: {self.label} | Status: {status} | Speed: {self.speed:.2f} m/s"
+		return f"Object | ID:{self.id} | Label: {self.label} | Static: {self.is_static()} | Speed: {self.speed:.2f} m/s"
 
 	def predict(self):
 		"""
@@ -114,7 +107,7 @@ class TrackedObject:
 		self.x = self.x + torch.matmul(K, y)
 
 		# P = (I - K·H)·P
-		I = torch.eye(self.x.shape[0], dtype=torch.float32)
+		I = torch.eye(self.x.shape[0], dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		self.P = torch.matmul((I - torch.matmul(K, self.H)), self.P)
 
 		return self.x
@@ -129,12 +122,12 @@ class TrackedObject:
 		old_timestamp = self.timestamp
 
 		# Process Open3D tensor directly without unnecessary conversions
-		centroid_tensor = self._process_o3d_tensor(centroid)
+		centroid_tensor = centroid
 
 		# Update basic attributes
-		self.centroid = centroid_tensor
 		self.points = points  # Keep as Open3D object
-		self.features = self._process_o3d_tensor(features)
+		self.centroid = centroid_tensor
+		self.features = features
 
 		# Calculate time difference
 		dt = timestamp - old_timestamp
@@ -181,7 +174,7 @@ class TrackedObject:
 			if self.is_static():
 
 				kalman_speed = 0.0
-				self.x[3:6] = torch.zeros(3, dtype=torch.float32)  # Reset velocity components
+				self.x[3:6] = torch.zeros(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 
 		# Set speed from Kalman filter
 		self.speed = kalman_speed
@@ -189,7 +182,7 @@ class TrackedObject:
 		if self.speed < speed_threshold:
 
 			self.speed = 0.0
-			self.x[3:6] = torch.zeros(3, dtype=torch.float32)  # Reset velocity components
+			self.x[3:6] = torch.zeros(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 
 		# Set direction if speed is non-zero
 		if kalman_speed > 0:
@@ -201,7 +194,7 @@ class TrackedObject:
 		Update velocity statistics based on recent movement.
 		"""
 
-		# Calculate raw velocity - use more efficient vector operations
+		# Calculate raw velocity
 		displacement = torch.norm(new_pos - old_pos).item()
 		raw_velocity = displacement / dt
 
@@ -216,7 +209,7 @@ class TrackedObject:
 		if len(self.velocity_history) >= 3:
 
 			# Only use recent history for calculations
-			recent_velocities = torch.tensor(self.velocity_history[-5:])
+			recent_velocities = torch.tensor(self.velocity_history[-5:], device=TORCH_DEVICE)
 			mean_velocity = torch.mean(recent_velocities).item()
 
 			if mean_velocity > 0.1:
@@ -242,7 +235,7 @@ class TrackedObject:
 		max_pos_variance = torch.max(pos_variance).item()
 
 		# Calculate velocity metrics
-		velocity_tensor = torch.tensor(self.velocity_history)
+		velocity_tensor = torch.tensor(self.velocity_history, device=TORCH_DEVICE)
 		velocity_mean = torch.mean(velocity_tensor).item()
 
 		# Static confidence increases with low variance and low mean velocity
@@ -282,7 +275,7 @@ class TrackedObject:
 		# Check if static confidence exceeds moving confidence with low recent velocity
 		if self.static_confidence > self.moving_confidence:
 
-			recent_velocities = torch.tensor(self.velocity_history[-3:])
+			recent_velocities = torch.tensor(self.velocity_history[-3:], device=TORCH_DEVICE)
 			return torch.mean(recent_velocities).item() < 0.2
 
 		return False
@@ -310,7 +303,7 @@ class TrackedObject:
 			return self.centroid
 
 		# Use tensor operations to predict future position
-		x_pred = torch.zeros(6, dtype=torch.float32)
+		x_pred = torch.zeros(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		x_pred[:3] = self.x[:3] + time_delta * self.x[3:6]
 		x_pred[3:6] = self.x[3:6]
 

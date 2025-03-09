@@ -12,6 +12,7 @@ from tfg.model import PointNetTrainer, LABEL_MAP
 from tfg.tracked_object import TrackedObject
 from tfg.utils import *
 from visualization_msgs.msg import MarkerArray
+from tfg.constants import YELLOW, RESET
 
 
 class LidarProcessor(Node):
@@ -241,9 +242,6 @@ class LidarProcessor(Node):
 
 	def print_debug(self, ros_to_o3d_time, process_time, o3d_to_ros_time, processing_time):
 		"""Print debug information about processing times"""
-
-		YELLOW = '\033[93m'
-		RESET = '\033[0m'
 
 		self.get_logger().info(f"Processing time: {processing_time:.4f} seconds")
 
