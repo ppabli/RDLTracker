@@ -366,7 +366,7 @@ class PointNetTrainer:
 	def load_model(self, path='pointnet.pth'):
 		"""Load model checkpoint."""
 
-		checkpoint = torch.load(path)
+		checkpoint = torch.load(path, map_location=self.device)
 		self.model.load_state_dict(checkpoint['model_state_dict'])
 		self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
