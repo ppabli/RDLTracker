@@ -15,7 +15,7 @@ class TrackedObject:
 		# Store the original Open3D PointCloud object directly
 		self.points = points
 
-		# Store centroids and features as Open3D tensors or PyTorch tensors
+		# Store centroids and features using PyTorch tensors
 		self.centroid = centroid
 		self.features = features
 
@@ -47,29 +47,26 @@ class TrackedObject:
 		Initialize Kalman filter for position and velocity tracking using PyTorch.
 		"""
 
-		# Default time step
-		dt = 0.1
-
 		# State transition matrix (physics model)
-		self.F = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
-		self.F[0, 3] = self.F[1, 4] = self.F[2, 5] = dt
+		self.F = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE).contiguous()
+		self.F[0, 3] = self.F[1, 4] = self.F[2, 5] = 0.1
 
 		# Measurement function
-		self.H = torch.zeros((3, 6), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
+		self.H = torch.zeros((3, 6), dtype=TORCH_DTYPE, device=TORCH_DEVICE).contiguous()
 		self.H[0, 0] = self.H[1, 1] = self.H[2, 2] = 1.0
 
 		# Initial state
-		self.x = torch.zeros(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
+		self.x = torch.zeros(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE).contiguous()
 		self.x[:3] = initial_position
 
 		# Covariance matrices - tuned for better tracking performance
-		self.P = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE) * 10.0  # Initial state uncertainty
-		self.R = torch.eye(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE) * 0.1  # Measurement uncertainty
+		self.P = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE).contiguous() * 10.0	# Initial state uncertainty
+		self.R = torch.eye(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE).contiguous() * 0.1	# Measurement uncertainty
 
 		# Process noise - how much we expect the model to deviate from reality
 		self.Q = torch.eye(6, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
-		self.Q[0:3, 0:3] *= 0.1  # position noise
-		self.Q[3:6, 3:6] *= 0.05  # velocity noise
+		self.Q[0:3, 0:3] *= 0.1		# position noise
+		self.Q[3:6, 3:6] *= 0.05	# velocity noise
 
 	def __str__(self):
 		"""Return a string representation of the object."""
@@ -121,12 +118,9 @@ class TrackedObject:
 		old_centroid = self.centroid
 		old_timestamp = self.timestamp
 
-		# Process Open3D tensor directly without unnecessary conversions
-		centroid_tensor = centroid
-
 		# Update basic attributes
-		self.points = points  # Keep as Open3D object
-		self.centroid = centroid_tensor
+		self.points = points	# Keep as Open3D object
+		self.centroid = centroid
 		self.features = features
 
 		# Calculate time difference
@@ -142,19 +136,19 @@ class TrackedObject:
 			self.predict()
 
 			# Update step with new measurement
-			self.kalman_update(centroid_tensor)
+			self.kalman_update(centroid)
 
 		else:
 
 			# Initialize Kalman filter with first measurement
-			self.x[:3] = centroid_tensor
+			self.x[:3] = centroid
 			self.kf_initialized = True
 
 		# Update timestamp after processing
 		self.timestamp = timestamp
 
-		# Add to position history - store tensors directly
-		self.position_history.append((centroid_tensor, timestamp))
+		# Add to position history
+		self.position_history.append((centroid, timestamp))
 
 		if len(self.position_history) > self.max_history_length:
 
@@ -167,7 +161,7 @@ class TrackedObject:
 		# Only use Kalman speed if we have enough history
 		if len(self.position_history) >= 3:
 
-			self._update_velocity_statistics(old_centroid, centroid_tensor, dt)
+			self._update_velocity_statistics(old_centroid, centroid, dt)
 			self._calculate_motion_confidence()
 
 			# If we're confident this is a static object, force speed to zero
@@ -184,8 +178,7 @@ class TrackedObject:
 			self.speed = 0.0
 			self.x[3:6] = torch.zeros(3, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 
-		# Set direction if speed is non-zero
-		if kalman_speed > 0:
+		else:
 
 			self.direction = kalman_velocity / kalman_speed
 
@@ -227,7 +220,7 @@ class TrackedObject:
 
 			return
 
-		# Extract positions - convert to tensor stack
+		# Extract positions from history
 		positions = torch.stack([pos for pos, _ in self.position_history])
 
 		# Calculate positional variance
@@ -285,13 +278,12 @@ class TrackedObject:
 
 		return self.x[:3]
 
-	def compute_bounding_box(self, use_oriented=False):
+	def compute_bounding_box(self):
 		"""
 		Compute the bounding box of the object.
 		"""
 
-		# Create bounding box directly from the Open3D point cloud to avoid conversions
-		return self.points.get_oriented_bounding_box() if use_oriented else self.points.get_axis_aligned_bounding_box()
+		return self.points.get_axis_aligned_bounding_box()
 
 	def predict_position(self, time_delta):
 		"""

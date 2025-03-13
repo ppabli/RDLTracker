@@ -19,7 +19,7 @@ def ros2_msg_to_o3d_xyz(ros_cloud):
 	"""
 
 	dtype_np = [('x', NP_DTYPE), ('y', NP_DTYPE), ('z', NP_DTYPE)]
-	cloud_array = np.array(list(pc2.read_points(ros_cloud, field_names=("x", "y", "z"), skip_nans=True)), dtype=dtype_np)
+	cloud_array = np.array(pc2.read_points(ros_cloud, field_names=("x", "y", "z"), skip_nans=True), dtype=dtype_np)
 
 	points = np.stack((cloud_array['x'], cloud_array['y'], cloud_array['z']), axis=-1)
 
@@ -351,7 +351,7 @@ def objects_to_bounding_boxes(objects, frame_id):
 		text_marker.pose.position.x = float(center[0])
 		text_marker.pose.position.y = float(center[1])
 		text_marker.pose.position.z = float(center[2]) + 0.5
-		text_marker.scale.z = 0.15  # Text size
+		text_marker.scale.z = 0.15	# Text size
 		text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
 		text_marker.text = f"ID: {obj.id} | {obj.label} | {obj.speed:.2f} m/s"
 

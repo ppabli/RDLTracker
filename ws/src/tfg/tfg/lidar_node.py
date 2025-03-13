@@ -230,12 +230,10 @@ class LidarProcessor(Node):
 		objects = filter_points_objects(filtered_cloud, timestamp)
 
 		# Classify objects if model is available
-		#if self.classification_model is not None:
+		if self.classification_model is not None:
 
-		#	objects = classify_objects_by_model(objects, self.classification_model)
-
-		# Filter objects by label
-		#filtered_objects = filter_objects_by_label(objects)
+			objects = classify_objects_by_model(objects, self.classification_model)
+			objects = filter_objects_by_label(objects)
 
 		# Track objects across frames
 		self.track_objects(objects, timestamp, w_position=self.position_weight, w_features=self.feature_weight, max_association_cost=self.max_association_cost)

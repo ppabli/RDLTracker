@@ -205,9 +205,6 @@ class PointNet(nn.Module):
 
 	def forward(self, x):
 
-		batch_size = x.size(0)
-		num_points = x.size(1)
-
 		x = x.transpose(2, 1)
 		trans = self.input_transform(x)
 		x = x.transpose(2, 1)
