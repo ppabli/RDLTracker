@@ -2,8 +2,6 @@ import json
 import time
 import traceback
 import numpy as np
-import open3d.ml as _ml3d
-import open3d.ml.torch as ml3d
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from scipy.optimize import linear_sum_assignment
@@ -12,6 +10,7 @@ from tfg.model import PointNetTrainer, LABEL_MAP
 from tfg.tracked_object import TrackedObject
 from tfg.utils import *
 from visualization_msgs.msg import MarkerArray
+from tfg.constants import YELLOW, RESET
 
 
 class LidarProcessor(Node):
@@ -63,6 +62,9 @@ class LidarProcessor(Node):
 		self.feature_weight = self.declare_parameter('feature_weight', 0.7).value
 		self.max_association_cost = self.declare_parameter('max_association_cost', 1.75).value
 
+		# Model and tracking objects
+		self.classification_model_weights_path = self.declare_parameter('classification_model_weights_path', '/home/pablo/Desktop/Model/multi_object_model.pth').value
+
 		# Log parameters for debugging
 		params = {
 			"Real-time constraint": f"{self.real_time_constraint} seconds",
@@ -71,17 +73,18 @@ class LidarProcessor(Node):
 			"Frame ID": self.frame_id,
 			"Max tracked objects": self.max_tracked_objects,
 			"Max tracked objects age": f"{self.max_tracked_objects_age} seconds",
-			"Generate bounding boxes": f"{self.generate_bounding_boxes}",
-			"Calculate speed": f"{self.calculate_speed}",
-			"Notify on speed": f"{self.notify_on_speed}",
-			"Notify on width": f"{self.notify_on_width}",
-			"Notify on height": f"{self.notify_on_height}",
-			"Notify on length": f"{self.notify_on_length}",
-			"Notify on weight": f"{self.notify_on_weight}",
+			"Generate bounding boxes": self.generate_bounding_boxes,
+			"Calculate speed": self.calculate_speed,
+			"Notify on speed": self.notify_on_speed,
+			"Notify on width": self.notify_on_width,
+			"Notify on height": self.notify_on_height,
+			"Notify on length": self.notify_on_length,
+			"Notify on weight": self.notify_on_weight,
 			"GPS coordinates": self.gps_coordinates,
 			"Position weight": self.position_weight,
 			"Feature weight": self.feature_weight,
-			"Max association cost": self.max_association_cost
+			"Max association cost": self.max_association_cost,
+			"Classification model weights path": self.classification_model_weights_path
 		}
 
 		self.get_logger().info(f"Node parameters: {json.dumps(params, indent=4)}")
@@ -119,7 +122,7 @@ class LidarProcessor(Node):
 
 		try:
 
-			classification_model_path = "/home/pablo/Desktop/Model/multi_object_model.pth"
+			classification_model_path = self.classification_model_weights_path
 			classification_model = PointNetTrainer(num_classes=len(LABEL_MAP))
 			classification_model.load_model(classification_model_path)
 			classification_model.model.eval()
@@ -230,20 +233,15 @@ class LidarProcessor(Node):
 		if self.classification_model is not None:
 
 			objects = classify_objects_by_model(objects, self.classification_model)
-
-		# Filter objects by label
-		filtered_objects = filter_objects_by_label(objects)
+			objects = filter_objects_by_label(objects)
 
 		# Track objects across frames
-		self.track_objects(filtered_objects, timestamp, w_position=self.position_weight, w_features=self.feature_weight, max_association_cost=self.max_association_cost)
+		self.track_objects(objects, timestamp, w_position=self.position_weight, w_features=self.feature_weight, max_association_cost=self.max_association_cost)
 
 		return
 
 	def print_debug(self, ros_to_o3d_time, process_time, o3d_to_ros_time, processing_time):
 		"""Print debug information about processing times"""
-
-		YELLOW = '\033[93m'
-		RESET = '\033[0m'
 
 		self.get_logger().info(f"Processing time: {processing_time:.4f} seconds")
 

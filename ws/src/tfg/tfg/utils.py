@@ -10,22 +10,21 @@ from tfg.model import normalize_point_cloud_tensor
 from tfg.tracked_object import TrackedObject
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
+from tfg.constants import O3D_DEVICE, TORCH_DEVICE, O3D_DTYPE, TORCH_DTYPE, NP_DTYPE
 
-
-DEVICE = o3d.core.Device("CPU:0")
 
 def ros2_msg_to_o3d_xyz(ros_cloud):
 	"""
 	Convert the (x, y, z) ROS2 PointCloud2 message to an Open3D Tensor-based (x,y,z) PointCloud.
 	"""
 
-	dtype_np = [('x', np.float32), ('y', np.float32), ('z', np.float32)]
-	cloud_array = np.array(list(pc2.read_points(ros_cloud, field_names=("x", "y", "z"), skip_nans=True)), dtype=dtype_np)
+	dtype_np = [('x', NP_DTYPE), ('y', NP_DTYPE), ('z', NP_DTYPE)]
+	cloud_array = np.array(pc2.read_points(ros_cloud, field_names=("x", "y", "z"), skip_nans=True), dtype=dtype_np)
 
 	points = np.stack((cloud_array['x'], cloud_array['y'], cloud_array['z']), axis=-1)
 
-	o3d_cloud = o3d.t.geometry.PointCloud(DEVICE)
-	o3d_cloud.point.positions = o3d.core.Tensor(points, o3d.core.float32, o3d_cloud.device)
+	o3d_cloud = o3d.t.geometry.PointCloud(O3D_DEVICE)
+	o3d_cloud.point.positions = o3d.core.Tensor(points, O3D_DTYPE, O3D_DEVICE)
 
 	return o3d_cloud
 
@@ -34,11 +33,11 @@ def o3d_to_ros_msg_xyz(o3d_cloud, frame_id):
 	Convert an Open3D Tensor-based PointCloud (x, y, z) to a ROS2 PointCloud2 message efficiently.
 	"""
 
-	points = o3d_cloud.point.positions.numpy().astype(np.float32)
+	points = o3d_cloud.point.positions.numpy().astype(NP_DTYPE)
 
 	structured_array = np.zeros(len(points), dtype=[
-		('x', np.float32), ('y', np.float32), ('z', np.float32),
-		('intensity', np.float32), ('rgb', np.float32), ('label', np.uint32)
+		('x', NP_DTYPE), ('y', NP_DTYPE), ('z', NP_DTYPE),
+		('intensity', NP_DTYPE), ('rgb', NP_DTYPE), ('label', np.uint32)
 	])
 
 	structured_array['x'], structured_array['y'], structured_array['z'] = points.T
@@ -162,11 +161,14 @@ def filter_points_objects(cloud, timestamp, eps=0.5, min_points=40):
 
 		cluster_cloud = cloud.select_by_index(cluster_indices)
 
+		torch_centroid = torch.tensor(cluster_cloud.get_center().numpy(), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
+		torch_features = torch.tensor(get_features_fpfh(cluster_cloud).numpy(), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
+
 		result_objects.append(
 			TrackedObject(
 				points=cluster_cloud,
-				centroid=cluster_cloud.get_center(),
-				features=get_features_fpfh(cluster_cloud),
+				centroid=torch_centroid,
+				features=torch_features,
 				timestamp=timestamp
 			)
 		)
@@ -178,15 +180,15 @@ def objects_to_point_cloud(objects):
 	Convert a list of point cloud to a single point cloud.
 	"""
 
-	cloud = o3d.t.geometry.PointCloud(DEVICE)
+	cloud = o3d.t.geometry.PointCloud(O3D_DEVICE)
 
 	if len(objects) == 0:
 
-		cloud.point.positions = o3d.core.Tensor(np.zeros((0, 3), dtype=np.float32), dtype=o3d.core.float32, device=cloud.device)
+		cloud.point.positions = o3d.core.Tensor(np.zeros((0, 3), dtype=NP_DTYPE), dtype=O3D_DTYPE, device=O3D_DEVICE)
 		return cloud
 
 	points = np.concatenate([obj.points.point.positions.numpy() for obj in objects], axis=0)
-	cloud.point.positions = o3d.core.Tensor(points, dtype=o3d.core.float32, device=cloud.device)
+	cloud.point.positions = o3d.core.Tensor(points, dtype=O3D_DTYPE, device=O3D_DEVICE)
 
 	return cloud
 
@@ -207,7 +209,7 @@ def get_features_fpfh(cloud, radius=0.03, max_nn=50):
 
 	cloud.estimate_normals(max_nn=20, radius=radius)
 
-	camera_location = o3d.core.Tensor([0.0, 0.0, 0.0], dtype=o3d.core.Dtype.Float32, device=cloud.device)
+	camera_location = o3d.core.Tensor([0.0, 0.0, 0.0], dtype=O3D_DTYPE, device=O3D_DEVICE)
 	cloud.orient_normals_to_align_with_direction(camera_location)
 
 	fpfh = o3d.t.pipelines.registration.compute_fpfh_feature(
@@ -232,7 +234,7 @@ def classify_objects_by_model(objects, model, batch_size=16):
 	for obj in objects:
 
 		points = obj.points.point.positions.numpy()
-		normalized_points = normalize_point_cloud_tensor(torch.tensor(points, dtype=torch.float32))
+		normalized_points = normalize_point_cloud_tensor(torch.tensor(points, dtype=TORCH_DTYPE, device=TORCH_DEVICE))
 		all_points.append(normalized_points)
 
 	predictions = []
@@ -349,7 +351,7 @@ def objects_to_bounding_boxes(objects, frame_id):
 		text_marker.pose.position.x = float(center[0])
 		text_marker.pose.position.y = float(center[1])
 		text_marker.pose.position.z = float(center[2]) + 0.5
-		text_marker.scale.z = 0.15  # Text size
+		text_marker.scale.z = 0.15	# Text size
 		text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
 		text_marker.text = f"ID: {obj.id} | {obj.label} | {obj.speed:.2f} m/s"
 

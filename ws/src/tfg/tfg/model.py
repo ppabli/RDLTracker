@@ -6,20 +6,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import open3d as o3d
+from tfg.constants import LABEL_MAP
 
-LABEL_MAP = {
-	"Car": 0,
-	"Pedestrian": 1,
-	"Cyclist": 2,
-	"Van": 3,
-	"Truck": 4,
-	"Person_sitting": 5,
-	"Tram": 6,
-	"Misc": 7,
-	"DontCare": 8
-}
-
-INVERSE_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
 def read_calib_file(calib_path):
 	"""Read KITTI calibration file."""
@@ -217,9 +205,6 @@ class PointNet(nn.Module):
 
 	def forward(self, x):
 
-		batch_size = x.size(0)
-		num_points = x.size(1)
-
 		x = x.transpose(2, 1)
 		trans = self.input_transform(x)
 		x = x.transpose(2, 1)
@@ -372,70 +357,15 @@ class PointNetTrainer:
 			'epoch': self.epochs,
 			'model_state_dict': self.model.state_dict(),
 			'optimizer_state_dict': self.optimizer.state_dict(),
-			'best_accuracy': best_accuracy if 'best_accuracy' in locals() else None,
+			'best_accuracy': best_accuracy if 'best_accuracy' in locals() else None, # type: ignore
 		}, path)
 
 	def load_model(self, path='pointnet.pth'):
 		"""Load model checkpoint."""
 
-		checkpoint = torch.load(path)
+		checkpoint = torch.load(path, map_location=self.device)
 		self.model.load_state_dict(checkpoint['model_state_dict'])
 		self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-	def predict_scene(self, point_cloud_path, calib_path=None):
-		"""Predict objects in a complete scene."""
-
-		self.model.eval()
-
-		point_cloud = np.fromfile(point_cloud_path, dtype=np.float32).reshape(-1, 4)
-
-		pcd = o3d.geometry.PointCloud()
-		pcd.points = o3d.utility.Vector3dVector(point_cloud[:, :3])
-
-		clusters = segment_scene(point_cloud[:, :3])
-
-		predictions = []
-
-		for cluster in clusters:
-
-			if len(cluster) < 50:
-
-				continue
-
-			normalized_points = normalize_point_cloud(cluster)
-
-			with torch.no_grad():
-
-				points_tensor = torch.tensor(normalized_points, dtype=torch.float32).unsqueeze(0).to(self.device)
-				output = self.model(points_tensor)
-				prediction = torch.argmax(output, dim=1).item()
-				confidence = torch.exp(output[0, prediction]).item()
-
-				if confidence > 0.5:
-
-					predictions.append({
-						'label': INVERSE_LABEL_MAP[prediction],
-						'confidence': confidence,
-						'points': cluster
-					})
-
-		return predictions, pcd
-
-	def predict_open3d(self, cloud):
-		"""
-		Predict object label for a single object in point cloud.
-		"""
-
-		self.model.eval()
-
-		points = cloud.point.positions.numpy()
-		normalized_points = normalize_point_cloud(points)
-
-		with torch.no_grad():
-			points_tensor = torch.tensor(normalized_points, dtype=torch.float32, device=self.device).unsqueeze(0)
-			prediction = torch.argmax(self.model(points_tensor), dim=1).item()
-
-		return INVERSE_LABEL_MAP[prediction]
 
 def segment_scene(points, voxel_size=0.5, min_points=50):
 	"""Segment scene into potential objects using DBSCAN clustering."""
