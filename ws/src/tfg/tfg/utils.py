@@ -1,3 +1,4 @@
+import hdbscan
 import numpy as np
 import open3d as o3d
 import rclpy
@@ -11,7 +12,9 @@ from tfg.tracked_object import TrackedObject
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from tfg.constants import O3D_DEVICE, TORCH_DEVICE, O3D_DTYPE, TORCH_DTYPE, NP_DTYPE
+import warnings
 
+warnings.filterwarnings("ignore")
 
 def ros2_msg_to_o3d_xyz(ros_cloud):
 	"""
@@ -138,7 +141,7 @@ def filter_points_outliers(cloud, neighbors=20, std_ratio=2.0):
 
 	return cloud_filtered
 
-def filter_points_objects(cloud, timestamp, eps=0.5, min_points=40):
+def filter_points_objects(cloud, timestamp, min_cluster_size=100, min_samples=5):
 	"""
 	Filter the objects from a point cloud
 	"""
@@ -147,20 +150,27 @@ def filter_points_objects(cloud, timestamp, eps=0.5, min_points=40):
 
 		return []
 
-	clusters = cloud.cluster_dbscan(eps=eps, min_points=min_points).numpy()
+	points = cloud.point.positions.numpy()
 
-	if clusters.max() < 0:
+	clusterer = hdbscan.HDBSCAN(
+		min_cluster_size=min_cluster_size,
+		min_samples=min_samples,
+		core_dist_n_jobs=-1
+	)
+
+	labels = clusterer.fit_predict(points)
+
+	if np.max(labels) < 0:
 
 		return []
 
 	result_objects = []
 
-	for idx in range(clusters.max() + 1):
+	for idx in range(np.max(labels) + 1):
 
-		cluster_indices = np.where(clusters == idx)[0]
+		cluster_indices = np.where(labels == idx)[0]
 
 		cluster_cloud = cloud.select_by_index(cluster_indices)
-
 		torch_centroid = torch.tensor(cluster_cloud.get_center().numpy(), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		torch_features = torch.tensor(get_features_fpfh(cluster_cloud).numpy(), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 
