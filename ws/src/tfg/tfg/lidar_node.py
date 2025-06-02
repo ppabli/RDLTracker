@@ -6,7 +6,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from scipy.optimize import linear_sum_assignment
 from sensor_msgs.msg import PointCloud2
-from tfg.pointnet import PointNet, feature_transform_regularizer
+from tfg.pointnet import PointNet
 from tfg.tracked_object import TrackedObject
 from tfg.utils import *
 from visualization_msgs.msg import MarkerArray
@@ -124,7 +124,7 @@ class LidarProcessor(Node):
 
 			classification_model_path = self.classification_model_weights_path
 
-			model = PointNet(num_classes=len(LABEL_MAP), feature_transform=True)
+			model = PointNet(num_classes=len(LABEL_MAP))
 			device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 			checkpoint = torch.load(classification_model_path, map_location=device)
