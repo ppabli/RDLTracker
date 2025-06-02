@@ -6,12 +6,12 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from scipy.optimize import linear_sum_assignment
 from sensor_msgs.msg import PointCloud2
-from tfg.model import PointNetTrainer, LABEL_MAP
+from tfg.pointnet import PointNet, feature_transform_regularizer
 from tfg.tracked_object import TrackedObject
 from tfg.utils import *
 from visualization_msgs.msg import MarkerArray
 from tfg.constants import YELLOW, RESET
-
+from tfg.constants import LABEL_MAP
 
 class LidarProcessor(Node):
 	"""
@@ -63,7 +63,7 @@ class LidarProcessor(Node):
 		self.max_association_cost = self.declare_parameter('max_association_cost', 1.75).value
 
 		# Model and tracking objects
-		self.classification_model_weights_path = self.declare_parameter('classification_model_weights_path', '/home/pablo/Desktop/Model/multi_object_model.pth').value
+		self.classification_model_weights_path = self.declare_parameter('classification_model_weights_path', '/home/pablo/Desktop/pointnet/output/pointnet_best.pth').value
 
 		# Log parameters for debugging
 		params = {
@@ -123,11 +123,23 @@ class LidarProcessor(Node):
 		try:
 
 			classification_model_path = self.classification_model_weights_path
-			classification_model = PointNetTrainer(num_classes=len(LABEL_MAP))
-			classification_model.load_model(classification_model_path)
-			classification_model.model.eval()
 
-			self.classification_model = classification_model
+			model = PointNet(num_classes=len(LABEL_MAP), feature_transform=True)
+			device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+			checkpoint = torch.load(classification_model_path, map_location=device)
+			model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+			model = model.to(device)
+
+			class ModelWrapper:
+
+				def __init__(self, model, device):
+
+					self.model = model
+					self.device = device
+
+			self.classification_model = ModelWrapper(model, device)
 			self.get_logger().info("Classification model loaded successfully.")
 
 		except Exception as e:
@@ -224,7 +236,7 @@ class LidarProcessor(Node):
 		filtered_cloud = filter_points_floor(filtered_cloud)
 		filtered_cloud = filter_points_outliers(filtered_cloud)
 		filtered_cloud = crop_y(filtered_cloud, 6)
-		#filtered_cloud = filter_points_by_distance(filtered_cloud, 18)
+		filtered_cloud = filter_points_by_distance(filtered_cloud, 18)
 
 		# Extract objects from the filtered cloud
 		objects = filter_points_objects(filtered_cloud, timestamp)

@@ -25,7 +25,7 @@ def generate_launch_description():
 				{'notify_on_length': True},
 				{'notify_on_weight': True},
 				{'gps_coordinates': [42.886232, -8.547737]},
-				{'classification_model_weights_path': '/home/pablo/Downloads/multi_object_model.pth'},
+				{'classification_model_weights_path': '/home/pablo/Desktop/pointnet/output/pointnet_best.pth'},
 			]
 		)
 

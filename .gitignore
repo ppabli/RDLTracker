@@ -1,6 +1,13 @@
 # Any file in records directory
 records/*
 
+# Installation
+install
+
+# Logs
+log
+logs
+
 # IDE
 .vscode/*
 

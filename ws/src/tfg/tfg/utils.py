@@ -1,3 +1,4 @@
+import hdbscan
 import numpy as np
 import open3d as o3d
 import rclpy
@@ -6,12 +7,13 @@ import sensor_msgs_py.point_cloud2 as pc2
 import torch
 from sensor_msgs.msg import PointField
 from std_msgs.msg import Header
-from tfg.model import normalize_point_cloud_tensor
 from tfg.tracked_object import TrackedObject
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from tfg.constants import O3D_DEVICE, TORCH_DEVICE, O3D_DTYPE, TORCH_DTYPE, NP_DTYPE
+import warnings
 
+warnings.filterwarnings("ignore")
 
 def ros2_msg_to_o3d_xyz(ros_cloud):
 	"""
@@ -138,7 +140,7 @@ def filter_points_outliers(cloud, neighbors=20, std_ratio=2.0):
 
 	return cloud_filtered
 
-def filter_points_objects(cloud, timestamp, eps=0.5, min_points=40):
+def filter_points_objects(cloud, timestamp, min_cluster_size=100, min_samples=5):
 	"""
 	Filter the objects from a point cloud
 	"""
@@ -147,20 +149,27 @@ def filter_points_objects(cloud, timestamp, eps=0.5, min_points=40):
 
 		return []
 
-	clusters = cloud.cluster_dbscan(eps=eps, min_points=min_points).numpy()
+	points = cloud.point.positions.numpy()
 
-	if clusters.max() < 0:
+	clusterer = hdbscan.HDBSCAN(
+		min_cluster_size=min_cluster_size,
+		min_samples=min_samples,
+		core_dist_n_jobs=-1
+	)
+
+	labels = clusterer.fit_predict(points)
+
+	if np.max(labels) < 0:
 
 		return []
 
 	result_objects = []
 
-	for idx in range(clusters.max() + 1):
+	for idx in range(np.max(labels) + 1):
 
-		cluster_indices = np.where(clusters == idx)[0]
+		cluster_indices = np.where(labels == idx)[0]
 
 		cluster_cloud = cloud.select_by_index(cluster_indices)
-
 		torch_centroid = torch.tensor(cluster_cloud.get_center().numpy(), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		torch_features = torch.tensor(get_features_fpfh(cluster_cloud).numpy(), dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 
@@ -220,7 +229,40 @@ def get_features_fpfh(cloud, radius=0.03, max_nn=50):
 
 	return fpfh
 
-def classify_objects_by_model(objects, model, batch_size=16):
+def normalize_point_cloud_tensor(points, num_points=128):
+	"""
+	Normalize point cloud tensor
+	"""
+
+	if not isinstance(points, torch.Tensor):
+
+		points = torch.tensor(points, dtype=torch.float32)
+
+	centroid = torch.mean(points, dim=0, keepdim=True)
+	points = points - centroid
+
+	distances = torch.norm(points, dim=1)
+	max_distance = torch.max(distances)
+
+	if max_distance > 0:
+
+		points = points / max_distance
+
+	n = points.shape[0]
+
+	if n > num_points:
+
+		idx = torch.randperm(n)[:num_points]
+		points = points[idx]
+
+	elif n < num_points:
+
+		idx = torch.randint(n, (num_points - n,))
+		points = torch.cat([points, points[idx]], dim=0)
+
+	return points
+
+def classify_objects_by_model(objects, model_wrapper, batch_size=16):
 	"""
 	Classify objects in a point cloud using a pre-trained model.
 	"""
@@ -244,10 +286,9 @@ def classify_objects_by_model(objects, model, batch_size=16):
 		for i in range(0, len(all_points), batch_size):
 
 			batch = all_points[i:i + batch_size]
+			batch_tensor = torch.stack(batch).to(model_wrapper.device)
 
-			batch_tensor = torch.stack(batch).to(model.device)
-
-			outputs = model.model(batch_tensor)
+			outputs, _ = model_wrapper.model(batch_tensor)
 
 			batch_predictions = torch.argmax(outputs, dim=1).cpu().numpy()
 			predictions.extend(batch_predictions)
