@@ -288,6 +288,8 @@ def classify_objects_by_model(objects, model_wrapper, batch_size=16):
 			batch = all_points[i:i + batch_size]
 			batch_tensor = torch.stack(batch).to(model_wrapper.device)
 
+			batch_tensor = batch_tensor.transpose(2, 1)
+
 			outputs, _ = model_wrapper.model(batch_tensor)
 
 			batch_predictions = torch.argmax(outputs, dim=1).cpu().numpy()
