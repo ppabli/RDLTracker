@@ -14,12 +14,6 @@ LABEL_MAP = {
 	"Car": 0,
 	"Pedestrian": 1,
 	"Cyclist": 2,
-	"Van": 3,
-	"Truck": 4,
-	"Person_sitting": 5,
-	"Tram": 6,
-	"Misc": 7,
-	"DontCare": 8
 }
 
 INVERSE_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}

@@ -7,7 +7,6 @@ import sensor_msgs_py.point_cloud2 as pc2
 import torch
 from sensor_msgs.msg import PointField
 from std_msgs.msg import Header
-from tfg.model import normalize_point_cloud_tensor
 from tfg.tracked_object import TrackedObject
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
@@ -230,7 +229,40 @@ def get_features_fpfh(cloud, radius=0.03, max_nn=50):
 
 	return fpfh
 
-def classify_objects_by_model(objects, model, batch_size=16):
+def normalize_point_cloud_tensor(points, num_points=128):
+	"""
+	Normalize point cloud tensor
+	"""
+
+	if not isinstance(points, torch.Tensor):
+
+		points = torch.tensor(points, dtype=torch.float32)
+
+	centroid = torch.mean(points, dim=0, keepdim=True)
+	points = points - centroid
+
+	distances = torch.norm(points, dim=1)
+	max_distance = torch.max(distances)
+
+	if max_distance > 0:
+
+		points = points / max_distance
+
+	n = points.shape[0]
+
+	if n > num_points:
+
+		idx = torch.randperm(n)[:num_points]
+		points = points[idx]
+
+	elif n < num_points:
+
+		idx = torch.randint(n, (num_points - n,))
+		points = torch.cat([points, points[idx]], dim=0)
+
+	return points
+
+def classify_objects_by_model(objects, model_wrapper, batch_size=16):
 	"""
 	Classify objects in a point cloud using a pre-trained model.
 	"""
@@ -254,10 +286,9 @@ def classify_objects_by_model(objects, model, batch_size=16):
 		for i in range(0, len(all_points), batch_size):
 
 			batch = all_points[i:i + batch_size]
+			batch_tensor = torch.stack(batch).to(model_wrapper.device)
 
-			batch_tensor = torch.stack(batch).to(model.device)
-
-			outputs = model.model(batch_tensor)
+			outputs, _ = model_wrapper.model(batch_tensor)
 
 			batch_predictions = torch.argmax(outputs, dim=1).cpu().numpy()
 			predictions.extend(batch_predictions)
