@@ -5,6 +5,7 @@ import rclpy
 import requests
 import sensor_msgs_py.point_cloud2 as pc2
 import torch
+import torch.nn.functional as F
 from sensor_msgs.msg import PointField
 from std_msgs.msg import Header
 from tfg.tracked_object import TrackedObject
@@ -12,6 +13,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from tfg.constants import O3D_DEVICE, TORCH_DEVICE, O3D_DTYPE, TORCH_DTYPE, NP_DTYPE
 import warnings
+from std_msgs.msg import String
 
 warnings.filterwarnings("ignore")
 
@@ -89,6 +91,9 @@ def crop_x(cloud, amplitude_threshold=0.5):
 	Crop a point cloud based on the x-axis margin.
 	"""
 
+	if amplitude_threshold <= 0.0:
+		return cloud
+
 	positions_np = cloud.point.positions.numpy()
 
 	mask = np.abs(positions_np[:, 0]) < amplitude_threshold
@@ -101,6 +106,9 @@ def crop_y(cloud, amplitude_threshold=0.5):
 	Crop a point cloud based on the y-axis margin.
 	"""
 
+	if amplitude_threshold <= 0.0:
+		return cloud
+
 	positions_np = cloud.point.positions.numpy()
 
 	mask = np.abs(positions_np[:, 1]) < amplitude_threshold
@@ -112,6 +120,9 @@ def crop_z(cloud, amplitude_threshold=0.5):
 	"""
 	Crop a point cloud based on the z-axis margin.
 	"""
+
+	if amplitude_threshold <= 0.0:
+		return cloud
 
 	positions_np = cloud.point.positions.numpy()
 
@@ -229,40 +240,7 @@ def get_features_fpfh(cloud, radius=0.03, max_nn=50):
 
 	return fpfh
 
-def normalize_point_cloud_tensor(points, num_points=128):
-	"""
-	Normalize point cloud tensor
-	"""
-
-	if not isinstance(points, torch.Tensor):
-
-		points = torch.tensor(points, dtype=torch.float32)
-
-	centroid = torch.mean(points, dim=0, keepdim=True)
-	points = points - centroid
-
-	distances = torch.norm(points, dim=1)
-	max_distance = torch.max(distances)
-
-	if max_distance > 0:
-
-		points = points / max_distance
-
-	n = points.shape[0]
-
-	if n > num_points:
-
-		idx = torch.randperm(n)[:num_points]
-		points = points[idx]
-
-	elif n < num_points:
-
-		idx = torch.randint(n, (num_points - n,))
-		points = torch.cat([points, points[idx]], dim=0)
-
-	return points
-
-def classify_objects_by_model(objects, model_wrapper, batch_size=16):
+def classify_objects_by_model(objects, model_wrapper, batch_size=32, confidence_threshold=0.5, min_points=32):
 	"""
 	Classify objects in a point cloud using a pre-trained model.
 	"""
@@ -272,14 +250,42 @@ def classify_objects_by_model(objects, model_wrapper, batch_size=16):
 		return objects
 
 	all_points = []
+	valid_objects = []
 
 	for obj in objects:
 
 		points = obj.points.point.positions.numpy()
-		normalized_points = normalize_point_cloud_tensor(torch.tensor(points, dtype=TORCH_DTYPE, device=TORCH_DEVICE))
+
+		if len(points) < min_points:
+
+			continue
+
+		cluster_mean = np.mean(points, axis=0)
+		points = points - cluster_mean
+		max_abs = np.max(np.abs(points))
+		points = points / max_abs
+
+		if len(points) > 1024:
+
+			idx_choice = np.random.choice(len(points), 1024, replace=False)
+			points = points[idx_choice]
+
+		elif len(points) < 1024:
+
+			idx_choice = np.random.choice(len(points), 1024 - len(points), replace=True)
+			padding = points[idx_choice]
+			points = np.vstack([points, padding])
+
+		normalized_points = torch.tensor(points, dtype=TORCH_DTYPE, device=TORCH_DEVICE)
 		all_points.append(normalized_points)
+		valid_objects.append(obj)
+
+	if not all_points:
+
+		return objects
 
 	predictions = []
+	confidences = []
 
 	with torch.no_grad():
 
@@ -292,12 +298,24 @@ def classify_objects_by_model(objects, model_wrapper, batch_size=16):
 
 			outputs, _ = model_wrapper.model(batch_tensor)
 
-			batch_predictions = torch.argmax(outputs, dim=1).cpu().numpy()
+			probabilities = F.softmax(outputs, dim=1)
+			max_probs, predicted_classes = torch.max(probabilities, dim=1)
+
+			batch_predictions = predicted_classes.cpu().numpy()
+			batch_confidences = max_probs.cpu().numpy()
+
 			predictions.extend(batch_predictions)
+			confidences.extend(batch_confidences)
 
-	for idx, obj in enumerate(objects):
+	for idx, obj in enumerate(valid_objects):
 
-		obj.label = predictions[idx]
+		predicted_class = predictions[idx]
+		confidence = confidences[idx]
+
+		label = predicted_class if confidence >= confidence_threshold else -1
+
+		obj.label = label
+		obj.confidence = float(confidence)
 
 	return objects
 
@@ -396,10 +414,31 @@ def objects_to_bounding_boxes(objects, frame_id):
 		text_marker.pose.position.z = float(center[2]) + 0.5
 		text_marker.scale.z = 0.15	# Text size
 		text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
-		text_marker.text = f"ID: {obj.id} | {obj.label} | {obj.speed:.2f} m/s"
+		text_marker.text = f"{obj}"
 
 		# Add markers to the array
 		marker_array.markers.append(marker)
 		marker_array.markers.append(text_marker)
 
 	return marker_array
+
+def format_message(message):
+
+	"""
+	Format a message for publishing.
+	"""
+
+	formatted_msg = String()
+	formatted_msg.data = message
+	return formatted_msg
+
+def format_debug_message(ros_to_o3d_time, process_time, o3d_to_ros_time):
+
+	debug_msg = String()
+	debug_msg.data = (
+		f"Debug Information | "
+		f"ROS->O3D: {ros_to_o3d_time:.4f} s | "
+		f"Processing: {process_time:.4f} s | "
+		f"O3D->ROS: {o3d_to_ros_time:.4f} s"
+	)
+	return debug_msg

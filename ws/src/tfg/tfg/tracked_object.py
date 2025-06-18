@@ -1,13 +1,12 @@
 from tfg.constants import TORCH_DEVICE, TORCH_DTYPE
 import torch
 
-
 class TrackedObject:
 	"""
 	Class to represent a tracked object with improved velocity estimation using Open3D tensors.
 	"""
 
-	def __init__(self, centroid, points, features, timestamp, id=-1, label='unknown', max_history_length=10):
+	def __init__(self, centroid, points, features, timestamp, id=-1, label=-1, confidence=1.0, max_history_length=10):
 		"""
 		Constructor for the TrackedObject class.
 		"""
@@ -20,7 +19,6 @@ class TrackedObject:
 		self.features = features
 
 		self.timestamp = timestamp
-		self.label = label
 		self.id = id
 		self.max_history_length = max_history_length
 
@@ -30,6 +28,9 @@ class TrackedObject:
 		# Pre-allocate memory for histories
 		self.position_history = []
 		self.velocity_history = []
+
+		self.label = label
+		self.label_confidence = confidence
 
 		# Confidence metrics
 		self.static_confidence = 0.0
@@ -68,10 +69,16 @@ class TrackedObject:
 		self.Q[0:3, 0:3] *= 0.1		# position noise
 		self.Q[3:6, 3:6] *= 0.05	# velocity noise
 
+	def _should_update_label(self, new_confidence):
+		"""
+		Determine if the label should be updated based on confidence.
+		"""
+
+		return new_confidence > self.label_confidence
+
 	def __str__(self):
 		"""Return a string representation of the object."""
-
-		return f"Object | ID:{self.id} | Label: {self.label} | Static: {self.is_static()} | Speed: {self.speed:.2f} m/s"
+		return (f"Object | ID:{self.id} | Label: {self.label} (conf: {self.label_confidence:.2f}) | Static: {self.is_static()} | Speed: {self.speed:.2f} m/s")
 
 	def predict(self):
 		"""
@@ -109,10 +116,15 @@ class TrackedObject:
 
 		return self.x
 
-	def update(self, centroid, points, features, timestamp, speed_threshold=0.05):
+	def update(self, centroid, points, features, timestamp, label, confidence=1.0, speed_threshold=0.05):
 		"""
 		Update the object with new information.
 		"""
+
+		if self._should_update_label(confidence):
+
+			self.label = label
+			self.label_confidence = confidence
 
 		# Store old values
 		old_centroid = self.centroid
@@ -310,3 +322,13 @@ class TrackedObject:
 		"""Get the current movement direction (normalized vector)."""
 
 		return self.direction
+
+	def get_label(self):
+		"""Get the current estimated label."""
+
+		return self.label
+
+	def get_label_confidence(self):
+		"""Get the confidence of the current label."""
+
+		return self.label_confidence
