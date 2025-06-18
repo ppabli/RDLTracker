@@ -212,47 +212,47 @@ class LidarProcessor(Node):
 
 		try:
 
-			start_processing = time.time()
+			times = {}
+			start_total = time.time()
 
 			# Convert ROS message to Open3D point cloud
-			start_time = time.time()
+			start = time.time()
 			cloud = ros2_msg_to_o3d_xyz(msg)
-			ros_to_o3d_time = time.time() - start_time
+			times['ros_to_o3d'] = time.time() - start
 
-			# Process the point cloud
-			start_time = time.time()
+			start = time.time()
+			process_times = self.process_point_cloud(cloud, return_times=True)
+			times.update(process_times)
+			times['process_point_cloud'] = time.time() - start
 
-			# Apply sequential filtering operations
-			self.process_point_cloud(cloud)
-
-			# Prepare output point cloud
+			start = time.time()
 			filtered_cloud = objects_to_point_cloud(self.tracked_objects)
-			process_time = time.time() - start_time
+			times['objects_to_point_cloud'] = time.time() - start
 
 			# Convert back to ROS message
-			start_time = time.time()
+			start = time.time()
 			filtered_msg = o3d_to_ros_msg_xyz(filtered_cloud, self.frame_id)
-			o3d_to_ros_time = time.time() - start_time
+			times['o3d_to_ros'] = time.time() - start
 
 			# Publish detected objects as bounding boxes
 			if self.generate_bounding_boxes and self.tracked_objects:
 
+				start = time.time()
 				marker_array = objects_to_bounding_boxes(self.tracked_objects, self.frame_id)
+				times['objects_to_bounding_boxes'] = time.time() - start
 				self.bbox_publisher.publish(marker_array)
 
 			# Publish filtered point cloud
 			self.publisher.publish(filtered_msg)
 
-			# Calculate total processing time
-			processing_time = time.time() - start_processing
+			times['total'] = time.time() - start_total
 
 			# Print and send debug information if enabled
 			if self.debug_mode:
 
-				self.print_debug(ros_to_o3d_time, process_time, o3d_to_ros_time, processing_time)
-				self.notification_publisher.publish(
-					format_debug_message(ros_to_o3d_time, process_time, o3d_to_ros_time)
-				)
+				self.print_debug(times)
+				msg_str = json.dumps({k: f"{v:.4f}s" for k, v in times.items()}, indent=2)
+				self.notification_publisher.publish(format_message(msg_str))
 
 			if self.notify_on_speed and hasattr(self, 'max_speed') and self.max_speed != np.inf:
 
@@ -270,55 +270,79 @@ class LidarProcessor(Node):
 			self.get_logger().error(f"Error processing point cloud: {e}")
 			print(traceback.format_exc())
 
-	def process_point_cloud(self, cloud):
+	def process_point_cloud(self, cloud, return_times=False):
 		"""
-		Process the point cloud through a pipeline of filters.
+		Process the point cloud through a pipeline of filters. Si return_times=True, devuelve los tiempos de cada bloque.
 		"""
 
-		# Extract timestamp from current time if we don't have it from the message
+		times = {}
+
+		# Extract timestamp from current time
 		timestamp = time.time()
 
-		# Apply filters sequentially
+		start = time.time()
 		filtered_cloud = filter_points_downsample(cloud)
+		times['downsample'] = time.time() - start
+
+		start = time.time()
 		filtered_cloud = filter_points_floor(filtered_cloud)
+		times['floor'] = time.time() - start
+
+		start = time.time()
 		filtered_cloud = filter_points_outliers(filtered_cloud)
+		times['outliers'] = time.time() - start
 
+		start = time.time()
 		filtered_cloud = crop_x(filtered_cloud, self.crop_x)
+		times['crop_x'] = time.time() - start
+
+		start = time.time()
 		filtered_cloud = crop_y(filtered_cloud, self.crop_y)
+		times['crop_y'] = time.time() - start
+
+		start = time.time()
 		filtered_cloud = crop_z(filtered_cloud, self.crop_z)
+		times['crop_z'] = time.time() - start
 
+		start = time.time()
 		filtered_cloud = filter_points_by_distance(filtered_cloud, 18)
+		times['distance'] = time.time() - start
 
-		# Extract objects from the filtered cloud
+		start = time.time()
 		objects = filter_points_objects(filtered_cloud, timestamp)
+		times['objects_extraction'] = time.time() - start
 
 		# Classify objects if model is available
 		if self.classification_model is not None:
 
+			start = time.time()
 			objects = classify_objects_by_model(objects, self.classification_model)
-			objects = filter_objects_by_label(objects)
+			times['classification'] = time.time() - start
 
-		# Track objects across frames
+			start = time.time()
+			objects = filter_objects_by_label(objects)
+			times['label_filter'] = time.time() - start
+
+		start = time.time()
 		self.track_objects(objects, timestamp, w_position=self.position_weight, w_features=self.feature_weight, max_association_cost=self.max_association_cost)
+		times['tracking'] = time.time() - start
+
+		if return_times:
+
+			return times
 
 		return
 
-	def print_debug(self, ros_to_o3d_time, process_time, o3d_to_ros_time, processing_time):
-		"""Print debug information about processing times"""
+	def print_debug(self, times):
+		"""Print debug information to the console."""
 
-		self.get_logger().info(f"Processing time: {processing_time:.4f} seconds")
+		self.get_logger().info("--- Debug Information ---")
 
-		if processing_time > self.real_time_constraint:
+		for k, v in times.items():
 
-			self.get_logger().warn(
-				f'{YELLOW}Processing time {processing_time:.6f} seconds exceeded '
-				f'the constraint by {processing_time - self.real_time_constraint:.6f} seconds{RESET}'
-			)
+			self.get_logger().info(f"{k}: {v:.4f} s")
 
-		self.get_logger().info(f"Time for ROS to Open3D conversion: {ros_to_o3d_time:.4f} seconds")
-		self.get_logger().info(f"Time for processing: {process_time:.4f} seconds")
-		self.get_logger().info(f"Time for Open3D to ROS conversion: {o3d_to_ros_time:.4f} seconds")
-		self.get_logger().info(f"-------------------------------")
+		self.get_logger().info("-----------------------")
 
 	def track_objects(self, objects, timestamp, w_position=0.3, w_features=0.7, max_association_cost=1.75):
 		"""
