@@ -10,6 +10,7 @@ from tfg.pointnet import PointNet
 from tfg.tracked_object import TrackedObject
 from tfg.utils import *
 from visualization_msgs.msg import MarkerArray
+from std_msgs.msg import String
 from tfg.constants import YELLOW, RESET
 from tfg.constants import LABEL_MAP
 
@@ -39,13 +40,18 @@ class LidarProcessor(Node):
 		self.input_topic = self.declare_parameter('input_topic', '/livox/lidar').value
 		self.frame_id = self.declare_parameter('frame_id', 'livox_frame').value
 
+		# Cropping parameters
+		self.crop_x = self.declare_parameter('crop_x', 0.0).value
+		self.crop_y = self.declare_parameter('crop_y', 0.0).value
+		self.crop_z = self.declare_parameter('crop_z', 0.0).value
+
 		# Object tracking parameters
 		self.max_tracked_objects = self.declare_parameter('max_tracked_objects', 10).value
 		self.max_tracked_objects_age = self.declare_parameter('max_tracked_objects_age', 1.0).value
 
 		# Feature flags
 		self.generate_bounding_boxes = self.declare_parameter('generate_bounding_boxes', False).value
-		self.calculate_speed = self.declare_parameter('calculate_speed', True).value
+		self.calculate_speed = self.declare_parameter('calculate_speed', False).value
 
 		# Notification settings
 		self.notify_on_speed = self.declare_parameter('notify_on_speed', False).value
@@ -63,6 +69,7 @@ class LidarProcessor(Node):
 		self.max_association_cost = self.declare_parameter('max_association_cost', 1.75).value
 
 		# Model and tracking objects
+		self.use_classification_model = self.declare_parameter('use_classification_model', False).value
 		self.classification_model_weights_path = self.declare_parameter('classification_model_weights_path', '/home/pablo/Desktop/pointnet/output/pointnet_best.pth').value
 
 		# Log parameters for debugging
@@ -71,6 +78,9 @@ class LidarProcessor(Node):
 			"Debug mode": self.debug_mode,
 			"Input topic": self.input_topic,
 			"Frame ID": self.frame_id,
+			"Crop X": self.crop_x,
+			"Crop Y": self.crop_y,
+			"Crop Z": self.crop_z,
 			"Max tracked objects": self.max_tracked_objects,
 			"Max tracked objects age": f"{self.max_tracked_objects_age} seconds",
 			"Generate bounding boxes": self.generate_bounding_boxes,
@@ -84,6 +94,7 @@ class LidarProcessor(Node):
 			"Position weight": self.position_weight,
 			"Feature weight": self.feature_weight,
 			"Max association cost": self.max_association_cost,
+			"Use classification model": self.use_classification_model,
 			"Classification model weights path": self.classification_model_weights_path
 		}
 
@@ -117,30 +128,42 @@ class LidarProcessor(Node):
 			10
 		)
 
+		self.notification_publisher = self.create_publisher(
+			String,
+			'/notifications',
+			10
+		)
+
 	def setup_objects(self):
 		"""Initialize ML models and tracking objects"""
 
 		try:
 
-			classification_model_path = self.classification_model_weights_path
+			if self.use_classification_model:
 
-			model = PointNet(num_classes=len(LABEL_MAP))
-			device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+				classification_model_path = self.classification_model_weights_path
 
-			checkpoint = torch.load(classification_model_path, map_location=device)
-			model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+				model = PointNet(num_classes=len(LABEL_MAP))
+				device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-			model = model.to(device)
+				checkpoint = torch.load(classification_model_path, map_location=device)
+				model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
-			class ModelWrapper:
+				model = model.to(device)
 
-				def __init__(self, model, device):
+				class ModelWrapper:
 
-					self.model = model
-					self.device = device
+					def __init__(self, model, device):
 
-			self.classification_model = ModelWrapper(model, device)
-			self.get_logger().info("Classification model loaded successfully.")
+						self.model = model
+						self.device = device
+
+				self.classification_model = ModelWrapper(model, device)
+				self.get_logger().info("Classification model loaded successfully.")
+
+			else:
+
+				self.classification_model = None
 
 		except Exception as e:
 
@@ -156,11 +179,11 @@ class LidarProcessor(Node):
 
 				map_data = get_openstreetmap_data(self.gps_coordinates[0], self.gps_coordinates[1])
 
-				self.max_speed = map_data.get('maxspeed', np.inf)
-				self.max_width = map_data.get('maxwidth', np.inf)
-				self.max_height = map_data.get('maxheight', np.inf)
-				self.max_length = map_data.get('maxlength', np.inf)
-				self.max_weight = map_data.get('maxweight', np.inf)
+				self.max_speed = float(map_data.get('maxspeed', np.inf))
+				self.max_width = float(map_data.get('maxwidth', np.inf))
+				self.max_height = float(map_data.get('maxheight', np.inf))
+				self.max_length = float(map_data.get('maxlength', np.inf))
+				self.max_weight = float(map_data.get('maxweight', np.inf))
 
 				self.get_logger().info(f"Map data loaded: {json.dumps(map_data, indent=4)}")
 
@@ -213,10 +236,24 @@ class LidarProcessor(Node):
 			# Calculate total processing time
 			processing_time = time.time() - start_processing
 
-			# Print debug information if enabled
+			# Print and send debug information if enabled
 			if self.debug_mode:
 
 				self.print_debug(ros_to_o3d_time, process_time, o3d_to_ros_time, processing_time)
+				self.notification_publisher.publish(
+					format_debug_message(ros_to_o3d_time, process_time, o3d_to_ros_time)
+				)
+
+			if self.notify_on_speed and hasattr(self, 'max_speed') and self.max_speed != np.inf:
+
+				filtered_objects = [
+					obj for obj in self.tracked_objects if obj.get_label() != -1 and obj.speed > self.max_speed
+				]
+
+				for obj in filtered_objects:
+
+					notification = f"Object {obj.id} exceeds speed limit: {obj.speed:.2f} m/s"
+					self.notification_publisher.publish(format_message(notification))
 
 		except Exception as e:
 
@@ -235,7 +272,11 @@ class LidarProcessor(Node):
 		filtered_cloud = filter_points_downsample(cloud)
 		filtered_cloud = filter_points_floor(filtered_cloud)
 		filtered_cloud = filter_points_outliers(filtered_cloud)
-		filtered_cloud = crop_y(filtered_cloud, 6)
+
+		filtered_cloud = crop_x(filtered_cloud, self.crop_x)
+		filtered_cloud = crop_y(filtered_cloud, self.crop_y)
+		filtered_cloud = crop_z(filtered_cloud, self.crop_z)
+
 		filtered_cloud = filter_points_by_distance(filtered_cloud, 18)
 
 		# Extract objects from the filtered cloud
@@ -336,7 +377,9 @@ class LidarProcessor(Node):
 					centroid=new_obj.centroid,
 					points=new_obj.points,
 					features=new_obj.features,
-					timestamp=timestamp
+					timestamp=timestamp,
+					label=0,
+					confidence=new_obj.confidence,
 				)
 
 				assigned_tracked_indices.add(row_idx)
@@ -365,7 +408,8 @@ class LidarProcessor(Node):
 						points=objects[j].points,
 						timestamp=timestamp,
 						features=objects[j].features,
-						label=objects[j].label
+						label=0,
+						confidence=objects[j].confidence
 					)
 
 					self.tracked_objects.append(new_object)
