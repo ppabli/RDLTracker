@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import traceback
 import numpy as np
@@ -7,8 +8,10 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from scipy.optimize import linear_sum_assignment
 from sensor_msgs.msg import PointCloud2
 from tfg.pointnet import PointNet
+from tfg.pointnet_pp import PointNetPlusPlus
 from tfg.tracked_object import TrackedObject
 from tfg.utils import *
+from tfg.model_wrapper import ModelWrapper
 from visualization_msgs.msg import MarkerArray
 from std_msgs.msg import String
 from tfg.constants import YELLOW, RESET
@@ -143,7 +146,21 @@ class LidarProcessor(Node):
 
 				classification_model_path = self.classification_model_weights_path
 
-				model = PointNet(num_classes=len(LABEL_MAP))
+				model_name = os.path.basename(classification_model_path).split('_')[0]
+
+				if model_name == "pointnet":
+
+					model = PointNet(num_classes=len(LABEL_MAP))
+
+				elif model_name == "pointnetpp":
+
+					model = PointNetPlusPlus(num_classes=len(LABEL_MAP))
+
+				else:
+
+					self.get_logger().warning(f"Unknown model name: {model_name}")
+					return
+
 				device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 				checkpoint = torch.load(classification_model_path, map_location=device)
@@ -151,14 +168,7 @@ class LidarProcessor(Node):
 
 				model = model.to(device)
 
-				class ModelWrapper:
-
-					def __init__(self, model, device):
-
-						self.model = model
-						self.device = device
-
-				self.classification_model = ModelWrapper(model, device)
+				self.classification_model = ModelWrapper(model_name, model, device)
 				self.get_logger().info("Classification model loaded successfully.")
 
 			else:

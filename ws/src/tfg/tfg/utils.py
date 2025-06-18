@@ -296,7 +296,7 @@ def classify_objects_by_model(objects, model_wrapper, batch_size=32, confidence_
 
 			batch_tensor = batch_tensor.transpose(2, 1)
 
-			outputs, _ = model_wrapper.model(batch_tensor)
+			outputs = model_wrapper.predict(batch_tensor)
 
 			probabilities = F.softmax(outputs, dim=1)
 			max_probs, predicted_classes = torch.max(probabilities, dim=1)
