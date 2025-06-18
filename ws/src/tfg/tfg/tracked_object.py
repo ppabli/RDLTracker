@@ -69,7 +69,7 @@ class TrackedObject:
 		self.Q[0:3, 0:3] *= 0.1		# position noise
 		self.Q[3:6, 3:6] *= 0.05	# velocity noise
 
-	def _should_update_label(self, new_label, new_confidence):
+	def _should_update_label(self, new_confidence):
 		"""
 		Determine if the label should be updated based on confidence.
 		"""
@@ -121,7 +121,7 @@ class TrackedObject:
 		Update the object with new information.
 		"""
 
-		if self._should_update_label(label, confidence):
+		if self._should_update_label(confidence):
 
 			self.label = label
 			self.label_confidence = confidence

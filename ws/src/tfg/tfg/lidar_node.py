@@ -378,7 +378,7 @@ class LidarProcessor(Node):
 					points=new_obj.points,
 					features=new_obj.features,
 					timestamp=timestamp,
-					label=0,
+					label=new_obj.label,
 					confidence=new_obj.confidence,
 				)
 
@@ -408,7 +408,7 @@ class LidarProcessor(Node):
 						points=objects[j].points,
 						timestamp=timestamp,
 						features=objects[j].features,
-						label=0,
+						label=objects[j].label,
 						confidence=objects[j].confidence
 					)
 

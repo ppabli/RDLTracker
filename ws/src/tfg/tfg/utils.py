@@ -314,7 +314,7 @@ def classify_objects_by_model(objects, model_wrapper, batch_size=32, confidence_
 
 		label = predicted_class if confidence >= confidence_threshold else -1
 
-		obj.label = 0
+		obj.label = label
 		obj.confidence = float(confidence)
 
 	return objects
