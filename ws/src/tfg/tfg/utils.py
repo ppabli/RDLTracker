@@ -227,7 +227,7 @@ def get_features_fpfh(cloud, radius=0.03, max_nn=50):
 	Get features from a cluster of points using FPFH descriptors.
 	"""
 
-	cloud.estimate_normals(max_nn=20, radius=radius)
+	cloud.estimate_normals(max_nn=max_nn, radius=radius)
 
 	camera_location = o3d.core.Tensor([0.0, 0.0, 0.0], dtype=O3D_DTYPE, device=O3D_DEVICE)
 	cloud.orient_normals_to_align_with_direction(camera_location)
